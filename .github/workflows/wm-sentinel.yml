@@ -1,0 +1,63 @@
+name: WM-Sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Minimal scopes: read the repo, write PR comments. Nothing else.
+# Triggered by `pull_request`, not `pull_request_target` — this workflow
+# never runs with privileged secrets against untrusted PR code.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the CLI can check out the base branch into a
+          # worktree for baseline scanning (see `wm-sentinel github-comment`).
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install WM-Sentinel dependencies
+        working-directory: Backend
+        run: npm ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Semgrep & Bandit
+        run: pip install semgrep bandit
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          rm gitleaks.tar.gz
+
+      - name: Install OSV-Scanner
+        run: |
+          curl -sSfL -o osv-scanner \
+            https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64
+          chmod +x osv-scanner
+          sudo mv osv-scanner /usr/local/bin/osv-scanner
+
+      - name: Run WM-Sentinel scan (PR diff)
+        working-directory: Backend
+        run: npm run cli -- scan .. --pr --base "${{ github.event.pull_request.base.ref }}"
+
+      - name: Evaluate security gate and comment on PR
+        working-directory: Backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run cli -- github-comment .. --base "${{ github.event.pull_request.base.ref }}"
