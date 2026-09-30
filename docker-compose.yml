@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ./Backend
+    ports:
+      - "4000:4000"
+    env_file:
+      - ./Backend/.env
+    volumes:
+      - ./Backend/src:/app/src
+      - ./Backend/prisma:/app/prisma
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:4000
+    depends_on:
+      - backend
+
+# No local Postgres container: the database is Neon (managed, cloud-hosted).
+# Point Backend/.env DATABASE_URL / DIRECT_URL at a Neon branch (use a
+# separate dev branch, not the production branch, for local development).

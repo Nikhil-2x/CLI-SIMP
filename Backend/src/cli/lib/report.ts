@@ -1,0 +1,45 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { CorrelatedFinding } from "../../core/correlation/types.js";
+import type { RiskOutput } from "../../core/risk/types.js";
+
+const STATE_DIR = ".wm-sentinel";
+const LAST_REPORT_FILE = "last-report.json";
+const DEFAULT_OUTPUT_FILE = "wm-sentinel-report.json";
+
+export interface ReportFile {
+  version: 1;
+  projectPath: string;
+  branch?: string;
+  commitSha?: string;
+  generatedAt: string;
+  scannerResults: Array<{ scanner: string; findingCount: number; error?: string }>;
+  rawFindingCount: number;
+  findings: Array<CorrelatedFinding & RiskOutput>;
+}
+
+export async function saveReport(
+  projectPath: string,
+  report: ReportFile,
+  outputPath?: string
+): Promise<string> {
+  const stateDir = join(projectPath, STATE_DIR);
+  await mkdir(stateDir, { recursive: true });
+
+  const json = JSON.stringify(report, null, 2);
+  await writeFile(join(stateDir, LAST_REPORT_FILE), json, "utf-8");
+
+  const finalOutput = outputPath ?? join(projectPath, DEFAULT_OUTPUT_FILE);
+  await writeFile(finalOutput, json, "utf-8");
+
+  return finalOutput;
+}
+
+export async function loadLastReport(projectPath: string): Promise<ReportFile | null> {
+  try {
+    const raw = await readFile(join(projectPath, STATE_DIR, LAST_REPORT_FILE), "utf-8");
+    return JSON.parse(raw) as ReportFile;
+  } catch {
+    return null;
+  }
+}

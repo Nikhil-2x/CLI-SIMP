@@ -1,0 +1,334 @@
+// WM-Sentinel data model — see implementation plan sections 5 & 8.
+// Datasource: Neon Postgres. DATABASE_URL is the pooled connection,
+// DIRECT_URL is the non-pooled connection Prisma needs for migrations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Core entities
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  name           String
+  repositoryUrl  String
+  defaultBranch  String   @default("main")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  assessments  Assessment[]
+  pullRequests PullRequest[]
+}
+
+enum AssessmentType {
+  FULL
+  PR
+  MANUAL
+  RETEST
+}
+
+enum AssessmentStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model Assessment {
+  id          String           @id @default(cuid())
+  projectId   String
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type        AssessmentType
+  status      AssessmentStatus @default(PENDING)
+
+  commitSha   String?
+  branch      String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+
+  scannerRuns ScannerRun[]
+  findings    Finding[]
+  retests     Retest[]
+  prFindings  PRFinding[]
+
+  @@index([projectId])
+}
+
+enum ScannerType {
+  SEMGREP
+  SONARQUBE
+  BANDIT
+  GITLEAKS
+  OSV
+  TRIVY
+  ZAP
+  NUCLEI
+  CUSTOM
+}
+
+enum ScannerRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+model ScannerRun {
+  id           String           @id @default(cuid())
+  assessmentId String
+  assessment   Assessment       @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  scanner      ScannerType
+  status       ScannerRunStatus @default(PENDING)
+
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  rawOutput    Json?
+  error        String?
+
+  @@index([assessmentId])
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum FindingCategory {
+  AUTHENTICATION
+  AUTHORIZATION
+  INPUT_VALIDATION
+  API_SECURITY
+  SECRETS
+  DEPENDENCY
+  INJECTION
+  CONFIGURATION
+  CRYPTOGRAPHY
+  OTHER
+}
+
+enum FindingSource {
+  SEMGREP
+  SONARQUBE
+  BANDIT
+  GITLEAKS
+  OSV
+  TRIVY
+  ZAP
+  NUCLEI
+  CUSTOM
+}
+
+enum FindingStatus {
+  OPEN
+  CONFIRMED
+  FALSE_POSITIVE
+  FIXED
+  RETEST_REQUIRED
+}
+
+model Finding {
+  id           String          @id @default(cuid())
+  assessmentId String
+  assessment   Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  fingerprint  String
+
+  title        String
+  description  String
+
+  severity     Severity
+  confidence   Int             @default(0)
+
+  category     FindingCategory
+  source       FindingSource
+
+  filePath     String?
+  lineStart    Int?
+  lineEnd      Int?
+
+  component    String?
+  endpoint     String?
+
+  status       FindingStatus   @default(OPEN)
+
+  cvssScore    Float?
+  cweId        String?
+  cveId        String?
+
+  // Risk engine output (Phase 7) — kept separate from raw CVSS.
+  riskScore    Float?
+  priority     String?
+
+  firstSeen    DateTime        @default(now())
+  lastSeen     DateTime        @default(now())
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  evidence         Evidence[]
+  relationsFrom    FindingRelation[] @relation("RelationFrom")
+  relationsTo      FindingRelation[] @relation("RelationTo")
+  retests          Retest[]
+  prFindings       PRFinding[]
+
+  @@index([assessmentId])
+  @@index([fingerprint])
+}
+
+model Evidence {
+  id        String   @id @default(cuid())
+  findingId String
+  finding   Finding  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  type      String // REQUEST | RESPONSE | SNIPPET | OBSERVATION | SCREENSHOT
+  content   String
+
+  createdAt DateTime @default(now())
+
+  @@index([findingId])
+}
+
+// Correlation links between raw findings that were merged into one
+// root-cause finding (Phase 6).
+model FindingRelation {
+  id         String   @id @default(cuid())
+
+  fromId     String
+  from       Finding  @relation("RelationFrom", fields: [fromId], references: [id], onDelete: Cascade)
+
+  toId       String
+  to         Finding  @relation("RelationTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  reason     String // e.g. "same file+line+CWE", "same endpoint+category"
+
+  createdAt  DateTime @default(now())
+
+  @@index([fromId])
+  @@index([toId])
+}
+
+// World Monitor-specific security rules (Phase 5) — expectations/checks,
+// not vulnerabilities in themselves.
+model SecurityRule {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g. WM-AUTH-001
+  title       String
+  description String
+  category    FindingCategory
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum RetestStatus {
+  PENDING
+  VULNERABLE
+  FIXED
+  INCONCLUSIVE
+}
+
+model Retest {
+  id             String       @id @default(cuid())
+  findingId      String
+  finding        Finding      @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  assessmentId   String
+  assessment     Assessment   @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  status         RetestStatus @default(PENDING)
+
+  previousResult String?
+  currentResult  String?
+  evidence       String?
+
+  createdAt      DateTime     @default(now())
+
+  @@index([findingId])
+  @@index([assessmentId])
+}
+
+enum PRSecurityGateStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+model PullRequest {
+  id           String                @id @default(cuid())
+  projectId    String
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  number       Int
+  title        String
+  headSha      String
+  baseSha      String
+
+  gateStatus   PRSecurityGateStatus  @default(PENDING)
+
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  prFindings   PRFinding[]
+
+  @@unique([projectId, number])
+}
+
+enum PRFindingState {
+  NEW
+  FIXED
+  UNCHANGED
+}
+
+model PRFinding {
+  id            String         @id @default(cuid())
+
+  pullRequestId String
+  pullRequest   PullRequest    @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+
+  findingId     String
+  finding       Finding        @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  assessmentId  String
+  assessment    Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  state         PRFindingState
+
+  createdAt     DateTime       @default(now())
+
+  @@index([pullRequestId])
+  @@index([findingId])
+}
+
+model Report {
+  id           String   @id @default(cuid())
+  assessmentId String
+
+  format       String // JSON | SARIF | HTML | PDF
+  filePath     String
+
+  createdAt    DateTime @default(now())
+
+  @@index([assessmentId])
+}
