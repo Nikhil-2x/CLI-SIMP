@@ -1,0 +1,27 @@
+semgrep --config=auto --json --quiet . | jq '.results|length'
+gitleaks detect --source . --no-git --exit-code 0 -f json -r /tmp/gl.json; jq length /tmp/gl.json
+osv-scanner --format json -r . | jq '[.results[].packages[].vulnerabilities[]]|length'
+bandit -r . -f json -q -x ./node_modules | jq '.results|length'
+
+npm run cli -- scan ~/coding/worldmonitor
+
+
+npm run cli -- findings ~/coding/worldmonitor --severity HIGH
+npm run cli -- report ~/coding/worldmonitor --format html -o /tmp/wm.html && xdg-open /tmp/wm.html
+
+
+
+.tools/venv
+pip install semgrep bandit
+ln -s "$PWD/.tools/venv/bin/semgrep" .tools/bin/semgrep
+ln -s "$PWD/.tools/venv/bin/bandit"  .tools/bin/bandit
+
+
+extract tarball of gitleaks first and then move in .tools/bin
+also install binary of osv-scanner and move ""
+then change permissions
+
+
+path export for .tools/bin
+
+
