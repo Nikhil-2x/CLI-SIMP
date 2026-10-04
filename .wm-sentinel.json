@@ -1,0 +1,11 @@
+{
+  "name": "wm-sentinel",
+  "defaultBranch": "main",
+  "ignorePaths": ["Backend/src/core/rules/", "Backend/src/core/scanners/category.ts", "Backend/tests/"],
+  "securityGate": {
+    "blockOn": ["CRITICAL"],
+    "warnOn": ["HIGH"],
+    "maxNewHigh": 0,
+    "minConfidence": 50
+  }
+}

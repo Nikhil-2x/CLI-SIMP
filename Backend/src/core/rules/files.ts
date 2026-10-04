@@ -41,10 +41,17 @@ export interface FileLineMatch {
 }
 
 /** Greps a set of files for a regex, returning relative-path + line-number matches. */
+/** Strips `//` and `/* *\/` comments and comment-only lines (leaves `https://` alone). */
+export function stripComments(line: string): string {
+  if (/^\s*(\/\/|\/?\*)/.test(line)) return "";
+  return line.replace(/\/\*.*?\*\//g, "").replace(/(^|[\s,;({])\/\/.*$/, "$1");
+}
+
 export async function grepFiles(
   projectPath: string,
   files: string[],
-  pattern: RegExp
+  pattern: RegExp,
+  options: { codeOnly?: boolean } = {}
 ): Promise<FileLineMatch[]> {
   const matches: FileLineMatch[] = [];
 
@@ -58,7 +65,7 @@ export async function grepFiles(
 
     const lines = content.split("\n");
     lines.forEach((line, idx) => {
-      if (pattern.test(line)) {
+      if (pattern.test(options.codeOnly ? stripComments(line) : line)) {
         matches.push({
           filePath: relative(projectPath, file).replace(/\\/g, "/"),
           lineNumber: idx + 1,

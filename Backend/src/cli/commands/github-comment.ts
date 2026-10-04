@@ -4,9 +4,10 @@ import * as p from "@clack/prompts";
 import chalk from "chalk";
 import { runAssessment } from "../../core/engine/index.js";
 import { classifyFindings } from "../../core/pr/diff.js";
-import { evaluateGate, DEFAULT_GATE_OPTIONS } from "../../core/pr/gate.js";
+import { evaluateGate } from "../../core/pr/gate.js";
 import { buildPRComment } from "../../core/pr/comment.js";
 import { upsertPRComment } from "../../core/github/postComment.js";
+import { loadConfig } from "../../core/config/index.js";
 import { loadLastReport } from "../lib/report.js";
 import { resolveBaseRef, withBaselineWorktree } from "../lib/worktree.js";
 
@@ -44,12 +45,18 @@ export async function githubCommentCommand(
     return;
   }
 
+  const config = await loadConfig(projectPath);
+  const changedFiles = currentReport.changedFiles;
+
   const spinner = p.spinner();
   spinner.start(`Scanning baseline (${base})...`);
 
   const baseRef = await resolveBaseRef(projectPath, base);
   const baselineFindings = await withBaselineWorktree(projectPath, baseRef, async (worktreePath) => {
-    const result = await runAssessment({ projectPath: worktreePath });
+    const result = await runAssessment(
+      { projectPath: worktreePath, ...(changedFiles?.length ? { changedFiles } : {}) },
+      { config }
+    );
     return result.findings;
   });
 
@@ -60,7 +67,7 @@ export async function githubCommentCommand(
   }
 
   const diff = classifyFindings(baselineFindings ?? [], currentReport.findings);
-  const gate = evaluateGate(diff.new, DEFAULT_GATE_OPTIONS);
+  const gate = evaluateGate(diff.new, config.securityGate);
   const body = buildPRComment(diff, gate, { existingCount: baselineFindings?.length ?? 0 });
 
   console.log();
@@ -73,8 +80,13 @@ export async function githubCommentCommand(
   const [owner, repo] = repoSlug?.split("/") ?? [];
 
   if (token && owner && repo && prNumber) {
-    await upsertPRComment({ token, owner, repo, prNumber, body });
-    console.log(chalk.green(`Posted comment to ${owner}/${repo}#${prNumber}`));
+    try {
+      await upsertPRComment({ token, owner, repo, prNumber, body });
+      console.log(chalk.green(`Posted comment to ${owner}/${repo}#${prNumber}`));
+    } catch (err) {
+      // Fork PRs get a read-only token — the gate result must still be enforced.
+      console.log(chalk.yellow(`Could not post PR comment: ${err instanceof Error ? err.message : err}`));
+    }
   } else {
     console.log(
       chalk.yellow(

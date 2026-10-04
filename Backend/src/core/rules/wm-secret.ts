@@ -11,6 +11,9 @@ const EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".json", ".yml", ".yaml"];
 // positives — this rule exists to catch generic "secret = <literal>"
 // patterns Gitleaks' rule set won't match.
 const SECRET_ASSIGNMENT = /(api[_-]?key|secret|password|token)\s*[:=]\s*["'][A-Za-z0-9_\-!@#$%^&*]{8,}["']/i;
+// The quoted value is an env var NAME (`TOKEN: 'RAILWAY_TOKEN'`) or a key/ID
+// identifier (`'wm-consumer-prices'`), not secret material.
+const IDENTIFIER_VALUE = /[:=]\s*["']([A-Z][A-Z0-9_]*|[a-z][a-z0-9]*([-.:][a-z0-9]+)+)["']/;
 const PLACEHOLDER = /changeme|placeholder|example|xxxxx|your[_-]?(key|secret|password)|<.*>/i;
 
 export const WMSecret001: WMRule = {
@@ -25,7 +28,9 @@ export const WMSecret001: WMRule = {
     const matches = await grepFiles(context.projectPath, files, SECRET_ASSIGNMENT);
 
     return matches
-      .filter((m) => !m.line.includes("process.env") && !PLACEHOLDER.test(m.line))
+      .filter(
+        (m) => !m.line.includes("process.env") && !PLACEHOLDER.test(m.line) && !IDENTIFIER_VALUE.test(m.line)
+      )
       .map((match) => ({
         fingerprint: makeFingerprint(["CUSTOM", "WM-SECRET-001", match.filePath, match.lineNumber]),
         title: "Possible hardcoded credential",

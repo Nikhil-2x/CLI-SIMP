@@ -75,7 +75,9 @@ export function inferRiskInputs(finding: CorrelatedFinding): RiskInput {
     severity: finding.severity,
     confidence: finding.confidence,
     exploitability,
-    internetExposed: Boolean(finding.endpoint) || finding.category === "API_SECURITY",
+    internetExposed:
+      (finding.context ?? "production") === "production" &&
+      (Boolean(finding.endpoint) || finding.category === "API_SECURITY"),
     sensitiveData: SENSITIVE_CATEGORIES.has(finding.category),
   };
 }

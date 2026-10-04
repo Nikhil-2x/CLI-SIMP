@@ -2,6 +2,7 @@ import type { Scanner, ScanContext, ScannerResult } from "./types.js";
 import type { SecurityFinding, Severity } from "../../types/finding.js";
 import { isCommandAvailable, runCommand } from "./exec.js";
 import { makeFingerprint } from "./fingerprint.js";
+import { inferCategory } from "./category.js";
 
 interface BanditResult {
   filename: string;
@@ -43,7 +44,7 @@ function toFinding(result: BanditResult): SecurityFinding {
     description: result.issue_text,
     severity: SEVERITY_MAP[result.issue_severity] ?? "LOW",
     confidence: CONFIDENCE_MAP[result.issue_confidence] ?? 50,
-    category: "OTHER",
+    category: inferCategory(cweId, `${result.test_name} ${result.issue_text}`),
     source: "BANDIT",
     filePath: result.filename,
     lineStart: result.line_number,
@@ -61,7 +62,14 @@ export const BanditScanner: Scanner = {
 
   async scan(context: ScanContext): Promise<ScannerResult> {
     const startedAt = new Date().toISOString();
-    const args = ["-r", ".", "-f", "json"];
+    const args = [
+      "-r",
+      ".",
+      "-f",
+      "json",
+      "-x",
+      "./node_modules,./.venv,./venv,./env,./.git,./dist,./build,./.next",
+    ];
 
     const { stdout, stderr, code } = await runCommand("bandit", args, {
       cwd: context.projectPath,

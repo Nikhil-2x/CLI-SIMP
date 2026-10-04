@@ -1,4 +1,4 @@
-import type { FindingCategory, FindingSource, SecurityFinding, Severity } from "../../types/finding.js";
+import type { CodeContext, FindingCategory, FindingSource, SecurityFinding, Severity } from "../../types/finding.js";
 
 /**
  * The result of merging one or more raw SecurityFinding records that were
@@ -25,6 +25,8 @@ export interface CorrelatedFinding {
   cweId?: string;
   cveId?: string;
   cvssScore?: number;
+
+  context?: CodeContext;
 
   members: SecurityFinding[];
 }

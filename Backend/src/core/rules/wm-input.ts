@@ -25,7 +25,8 @@ const PATTERNS: Array<{ regex: RegExp; title: string; description: string; cweId
     cweId: "CWE-78",
   },
   {
-    regex: /\beval\s*\(/,
+    // Not preceded by a regex/string delimiter: skips `/^eval(sha)?$/` etc.
+    regex: /(?<![\w$.\/^'"`])eval\s*\(/,
     title: "Use of eval()",
     description: "eval() executes arbitrary strings as code — avoid it entirely, especially on user input.",
     cweId: "CWE-95",
@@ -44,7 +45,7 @@ export const WMInput001: WMRule = {
     const findings: SecurityFinding[] = [];
 
     for (const pattern of PATTERNS) {
-      const matches = await grepFiles(context.projectPath, files, pattern.regex);
+      const matches = await grepFiles(context.projectPath, files, pattern.regex, { codeOnly: true });
       for (const match of matches) {
         findings.push({
           fingerprint: makeFingerprint(["CUSTOM", "WM-INPUT-001", match.filePath, match.lineNumber]),

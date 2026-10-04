@@ -56,7 +56,8 @@ export function buildPRComment(
     "### Security Gate",
     "",
     gate.passed ? "✅ Passed" : "❌ Failed",
-    ...(gate.reason ? [`Reason: ${gate.reason}`] : [])
+    ...(gate.reason ? [`Reason: ${gate.reason}`] : []),
+    ...gate.warnings.map((w) => `⚠️ ${w}`)
   );
 
   return lines.join("\n");

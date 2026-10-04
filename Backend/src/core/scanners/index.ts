@@ -16,35 +16,49 @@ export const scanners: Scanner[] = [SemgrepScanner, BanditScanner, GitleaksScann
  * Scanners that aren't installed are skipped, not failed — the caller
  * (worker/CLI) decides whether a skip is acceptable.
  */
-export async function runAllScanners(context: ScanContext): Promise<ScannerResult[]> {
+export interface ScannerHooks {
+  onScannerStart?: (name: string) => void;
+  onScannerDone?: (result: ScannerResult, skipped: boolean) => void;
+}
+
+export async function runAllScanners(
+  context: ScanContext,
+  hooks?: ScannerHooks
+): Promise<ScannerResult[]> {
   const results: ScannerResult[] = [];
 
   for (const scanner of scanners) {
-    const available = await scanner.isAvailable();
-    if (!available) {
-      results.push({
+    hooks?.onScannerStart?.(scanner.name);
+    let result: ScannerResult;
+    let skipped = false;
+
+    if (!(await scanner.isAvailable())) {
+      skipped = true;
+      result = {
         scanner: scanner.name,
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
         findings: [],
         rawOutput: null,
         error: `${scanner.name} is not installed or not on PATH — skipped`,
-      });
-      continue;
+      };
+    } else {
+      try {
+        result = await scanner.scan(context);
+      } catch (err) {
+        result = {
+          scanner: scanner.name,
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          findings: [],
+          rawOutput: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
-    try {
-      results.push(await scanner.scan(context));
-    } catch (err) {
-      results.push({
-        scanner: scanner.name,
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        findings: [],
-        rawOutput: null,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    results.push(result);
+    hooks?.onScannerDone?.(result, skipped);
   }
 
   return results;

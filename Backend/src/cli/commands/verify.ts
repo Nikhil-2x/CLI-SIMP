@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import * as p from "@clack/prompts";
 import chalk from "chalk";
 import { runAssessment } from "../../core/engine/index.js";
+import { isStillPresent } from "../../core/pr/diff.js";
 import { getGitInfo } from "../lib/git.js";
 import { loadLastReport } from "../lib/report.js";
 
@@ -47,11 +48,12 @@ export async function verifyCommand(findingId: string, targetPath: string): Prom
   const gitInfo = await getGitInfo(projectPath);
   const result = await runAssessment({
     projectPath,
+    ...(lastReport?.changedFiles?.length ? { changedFiles: lastReport.changedFiles } : {}),
     ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } : {}),
     ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),
   });
 
-  const stillPresent = result.findings.some((f) => f.id === previousFinding.id);
+  const stillPresent = isStillPresent(previousFinding, result.findings);
   spinner.stop(stillPresent ? "Finding is still present." : "Finding no longer detected.");
 
   await appendRetestLog(projectPath, {

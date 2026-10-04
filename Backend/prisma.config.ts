@@ -12,6 +12,6 @@ export default defineConfig({
     // Neon connection string. Use the DIRECT (non-pooled) connection here —
     // Prisma Migrate needs a direct connection. The running app can still
     // use a pooled connection separately if needed later.
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

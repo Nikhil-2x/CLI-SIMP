@@ -1,7 +1,10 @@
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import type { Scanner, ScanContext, ScannerResult } from "./types.js";
-import type { FindingCategory, SecurityFinding, Severity } from "../../types/finding.js";
+import type { SecurityFinding, Severity } from "../../types/finding.js";
 import { isCommandAvailable, runCommand } from "./exec.js";
 import { makeFingerprint } from "./fingerprint.js";
+import { inferCategory } from "./category.js";
 
 interface SemgrepResult {
   check_id: string;
@@ -38,17 +41,6 @@ const CONFIDENCE_MAP: Record<string, number> = {
   LOW: 30,
 };
 
-function mapCategory(metadataCategory?: string): FindingCategory {
-  switch ((metadataCategory ?? "").toLowerCase()) {
-    case "security":
-      return "OTHER";
-    case "correctness":
-      return "OTHER";
-    default:
-      return "OTHER";
-  }
-}
-
 function extractCwe(cwe?: string[] | string): string | undefined {
   const first = Array.isArray(cwe) ? cwe[0] : cwe;
   const match = first?.match(/CWE-\d+/i);
@@ -59,6 +51,7 @@ function toFinding(result: SemgrepResult): SecurityFinding {
   const severity = SEVERITY_MAP[result.extra.severity] ?? "LOW";
   const confidence = CONFIDENCE_MAP[result.extra.metadata?.confidence ?? ""] ?? 50;
   const cweId = extractCwe(result.extra.metadata?.cwe);
+  const category = inferCategory(cweId, result.check_id);
 
   return {
     fingerprint: makeFingerprint([
@@ -71,7 +64,7 @@ function toFinding(result: SemgrepResult): SecurityFinding {
     description: result.extra.message,
     severity,
     confidence,
-    category: mapCategory(result.extra.metadata?.category),
+    category,
     source: "SEMGREP",
     filePath: result.path,
     lineStart: result.start.line,
@@ -90,11 +83,22 @@ export const SemgrepScanner: Scanner = {
   async scan(context: ScanContext): Promise<ScannerResult> {
     const startedAt = new Date().toISOString();
     const args = ["--config=auto", "--json", "--quiet"];
-    if (context.changedFiles?.length) {
-      args.push(...context.changedFiles);
-    } else {
-      args.push(".");
+
+    // Files deleted in the PR still show up in `git diff --name-only`.
+    const existing: string[] = [];
+    for (const file of context.changedFiles ?? []) {
+      try {
+        await access(join(context.projectPath, file));
+        existing.push(file);
+      } catch {
+        // deleted/renamed away — nothing to scan
+      }
     }
+
+    if (context.changedFiles?.length && existing.length === 0) {
+      return { scanner: "SEMGREP", startedAt, completedAt: new Date().toISOString(), findings: [], rawOutput: null };
+    }
+    args.push(...(existing.length ? existing : ["."]));
 
     const { stdout, stderr, code } = await runCommand("semgrep", args, {
       cwd: context.projectPath,

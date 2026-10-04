@@ -36,6 +36,7 @@ program
   .argument("[path]", "project path", ".")
   .option("--severity <severity>", "filter by severity (CRITICAL|HIGH|MEDIUM|LOW|INFO)")
   .option("--source <source>", "filter by scanner source")
+  .option("--production", "hide findings in tests, docs and generated files")
   .action(findingsCommand);
 
 program
@@ -50,7 +51,7 @@ program
   .description("Export the last assessment report")
   .argument("[path]", "project path", ".")
   .option("-o, --output <file>", "output file path")
-  .option("--format <format>", "output format (json today; sarif/html/pdf in Phase 16)", "json")
+  .option("--format <format>", "output format: json | sarif | html", "json")
   .action(reportCommand);
 
 program

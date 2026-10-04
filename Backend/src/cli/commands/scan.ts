@@ -1,12 +1,9 @@
 import { resolve } from "node:path";
 import * as p from "@clack/prompts";
 import chalk from "chalk";
-import { scanners } from "../../core/scanners/index.js";
-import type { ScanContext, ScannerResult } from "../../core/scanners/types.js";
-import { flattenFindings } from "../../core/normalizer/index.js";
-import { runRules } from "../../core/rules/index.js";
-import { correlateFindings } from "../../core/correlation/index.js";
-import { scoreFindings } from "../../core/risk/index.js";
+import { runAssessment } from "../../core/engine/index.js";
+import { loadConfig } from "../../core/config/index.js";
+import type { ScanContext } from "../../core/scanners/types.js";
 import { getChangedFiles, getGitInfo } from "../lib/git.js";
 import { saveReport, type ReportFile } from "../lib/report.js";
 import { summaryLines } from "../lib/output.js";
@@ -23,81 +20,57 @@ export async function scanCommand(targetPath: string, options: ScanOptions): Pro
 
   p.intro(chalk.bold("WM-Sentinel Security Assessment"));
 
-  const totalSteps = 1 + scanners.length + 2; // discover + each scanner + correlate + risk
-  let step = 1;
-
-  const discoverSpinner = p.spinner();
-  discoverSpinner.start(`[${step}/${totalSteps}] Discovering project...`);
-
   const gitInfo = await getGitInfo(projectPath);
+  const config = await loadConfig(projectPath);
   let changedFiles: string[] | undefined;
 
   if (options.pr) {
     const base = options.base ?? "main";
     changedFiles = await getChangedFiles(projectPath, base);
     if (changedFiles.length === 0) {
-      discoverSpinner.stop(
-        `No changed files found against "${base}" — running a full scan instead.`
-      );
+      p.log.warn(`No changed files found against "${base}" — running a full scan instead.`);
+      changedFiles = undefined;
     } else {
-      discoverSpinner.stop(`Discovered ${changedFiles.length} changed file(s) against "${base}".`);
+      p.log.info(`Scanning ${changedFiles.length} changed file(s) against "${base}".`);
     }
   } else {
-    discoverSpinner.stop(`Discovered project at ${projectPath}`);
+    p.log.info(`Discovered project at ${projectPath}`);
   }
 
-  const scanContext: ScanContext = {
+  const context: ScanContext = {
     projectPath,
-    ...(changedFiles?.length ? { changedFiles } : {}),
+    ...(changedFiles ? { changedFiles } : {}),
     ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } : {}),
     ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),
   };
 
-  const scannerResults: ScannerResult[] = [];
+  let spinner = p.spinner();
+  let rawCount = 0;
+  let correlatedCount = 0;
 
-  for (const scanner of scanners) {
-    step++;
-    const spinner = p.spinner();
-    spinner.start(`[${step}/${totalSteps}] Running ${scanner.name}...`);
-
-    const available = await scanner.isAvailable();
-    if (!available) {
-      spinner.stop(`${scanner.name}: not installed — skipped`);
-      scannerResults.push({
-        scanner: scanner.name,
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        findings: [],
-        rawOutput: null,
-        error: `${scanner.name} is not installed or not on PATH`,
-      });
-      continue;
-    }
-
-    const result = await scanner.scan(scanContext);
-    const suffix = result.error ? chalk.red(` (${result.error})`) : "";
-    spinner.stop(`${scanner.name}: ${result.findings.length} finding(s)${suffix}`);
-    scannerResults.push(result);
-  }
-
-  step++;
-  const correlateSpinner = p.spinner();
-  correlateSpinner.start(`[${step}/${totalSteps}] Correlating findings...`);
-
-  const scannerFindings = flattenFindings(scannerResults);
-  const ruleFindings = await runRules({ projectPath, existingFindings: scannerFindings });
-  const allFindings = [...scannerFindings, ...ruleFindings];
-  const correlated = correlateFindings(allFindings);
-
-  correlateSpinner.stop(
-    `Correlated ${allFindings.length} raw finding(s) into ${correlated.length}.`
-  );
-
-  step++;
-  const riskSpinner = p.spinner();
-  riskSpinner.start(`[${step}/${totalSteps}] Calculating risk...`);
-  const scored = scoreFindings(correlated);
-  riskSpinner.stop("Risk calculated.");
+  const result = await runAssessment(context, {
+    config,
+    hooks: {
+      onScannerStart: (name) => {
+        spinner = p.spinner();
+        spinner.start(`Running ${name}...`);
+      },
+      onScannerDone: (r, skipped) => {
+        if (skipped) spinner.stop(`${r.scanner}: not installed — skipped`);
+        else {
+          const suffix = r.error ? chalk.red(` (${r.error.split("\n")[0]})`) : "";
+          spinner.stop(`${r.scanner}: ${r.findings.length} finding(s)${suffix}`);
+        }
+      },
+      onStage: (stage, info) => {
+        if (stage === "rules") p.log.step("Running World Monitor rules, correlating and scoring...");
+        if (stage === "risk") {
+          rawCount = info?.rawCount ?? 0;
+          correlatedCount = info?.correlatedCount ?? 0;
+        }
+      },
+    },
+  });
 
   const report: ReportFile = {
     version: 1,
@@ -105,27 +78,28 @@ export async function scanCommand(targetPath: string, options: ScanOptions): Pro
     ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),
     ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } : {}),
     generatedAt: new Date().toISOString(),
-    scannerResults: scannerResults.map((r) => ({
+    scannerResults: result.scannerResults.map((r) => ({
       scanner: r.scanner,
       findingCount: r.findings.length,
       ...(r.error ? { error: r.error } : {}),
     })),
-    rawFindingCount: allFindings.length,
-    findings: scored,
+    ...(changedFiles ? { changedFiles } : {}),
+    rawFindingCount: result.rawFindingCount,
+    findings: result.findings,
   };
 
   const outputPath = await saveReport(projectPath, report, options.output);
 
-  const lines = [
-    chalk.bold("Assessment completed."),
-    "",
-    `Raw findings:        ${allFindings.length}`,
-    `Correlated findings: ${scored.length}`,
-    "",
-    ...summaryLines(scored),
-    "",
-    `Report: ${outputPath}`,
-  ];
-
-  p.outro(lines.join("\n"));
+  p.outro(
+    [
+      chalk.bold("Assessment completed."),
+      "",
+      `Raw findings:        ${rawCount}`,
+      `Correlated findings: ${correlatedCount}`,
+      "",
+      ...summaryLines(result.findings),
+      "",
+      `Report: ${outputPath}`,
+    ].join("\n")
+  );
 }

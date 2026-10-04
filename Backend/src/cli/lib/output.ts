@@ -38,5 +38,7 @@ export function findingRow(finding: CorrelatedFinding & Partial<RiskOutput>): st
     ? `${finding.filePath}:${finding.lineStart ?? "?"}`
     : (finding.endpoint ?? "-");
   const priority = finding.priority ? chalk.dim(`[${finding.priority}]`) : "";
-  return `${chalk.dim(id)}  ${severity} ${priority} ${finding.title}\n         ${chalk.dim(location)} ${chalk.dim(`(${finding.sources.join(", ")})`)}`;
+  const context =
+    finding.context && finding.context !== "production" ? chalk.dim(` [${finding.context}]`) : "";
+  return `${chalk.dim(id)}  ${severity} ${priority} ${finding.title}\n         ${chalk.dim(location)} ${chalk.dim(`(${finding.sources.join(", ")}, ${finding.confidence}% conf)`)}${context}`;
 }

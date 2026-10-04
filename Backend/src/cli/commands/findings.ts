@@ -7,6 +7,7 @@ import type { Severity, FindingSource } from "../../types/finding.js";
 export interface FindingsOptions {
   severity?: string;
   source?: string;
+  production?: boolean;
 }
 
 export async function findingsCommand(targetPath: string, options: FindingsOptions): Promise<void> {
@@ -28,6 +29,10 @@ export async function findingsCommand(targetPath: string, options: FindingsOptio
   if (options.source) {
     const wanted = options.source.toUpperCase() as FindingSource;
     findings = findings.filter((f) => f.sources.includes(wanted));
+  }
+
+  if (options.production) {
+    findings = findings.filter((f) => (f.context ?? "production") === "production");
   }
 
   if (findings.length === 0) {

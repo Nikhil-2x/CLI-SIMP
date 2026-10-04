@@ -3,15 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
 
-/** Prefers `origin/<base>` (works with a shallow-but-fetched CI checkout) and falls back to the local branch name. */
-export async function resolveBaseRef(cwd: string, base: string): Promise<string> {
-  try {
-    await execa("git", ["rev-parse", "--verify", `origin/${base}`], { cwd });
-    return `origin/${base}`;
-  } catch {
-    return base;
-  }
-}
+export { resolveBaseRef } from "./git.js";
 
 /**
  * Checks out `ref` into a throwaway git worktree and runs `fn` against it —

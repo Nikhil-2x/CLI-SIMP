@@ -19,7 +19,6 @@ export function runCommand(
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd: options.cwd,
-      shell: process.platform === "win32",
     });
 
     let stdout = "";

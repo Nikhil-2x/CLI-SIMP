@@ -32,6 +32,9 @@ export interface Evidence {
   capturedAt: string;
 }
 
+/** Where the flagged code lives. Non-production findings are kept but can't block the gate. */
+export type CodeContext = "production" | "test" | "docs" | "generated";
+
 export interface SecurityFinding {
   fingerprint: string;
 
@@ -54,6 +57,8 @@ export interface SecurityFinding {
   cweId?: string;
   cveId?: string;
   cvssScore?: number;
+
+  context?: CodeContext;
 
   evidence?: Evidence[];
 }

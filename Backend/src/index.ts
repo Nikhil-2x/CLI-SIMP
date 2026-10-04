@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 4000;
 // Middleware to parse JSON bodies
 app.use(express.json());
 
-// Basic Route
+// Basic Route (public by design — wm-sentinel-ignore)
 app.get("/health", (req: Request, res: Response) => {
   res.json({ message: "API Working!" });
 });

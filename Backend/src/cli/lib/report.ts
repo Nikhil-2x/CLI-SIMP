@@ -14,6 +14,8 @@ export interface ReportFile {
   commitSha?: string;
   generatedAt: string;
   scannerResults: Array<{ scanner: string; findingCount: number; error?: string }>;
+  /** PR mode: the changed-file list this scan was restricted to. */
+  changedFiles?: string[];
   rawFindingCount: number;
   findings: Array<CorrelatedFinding & RiskOutput>;
 }

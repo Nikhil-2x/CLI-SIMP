@@ -33,12 +33,17 @@ export async function upsertPRComment(options: PostCommentOptions): Promise<void
   const { token, owner, repo, prNumber, body } = options;
   const listUrl = `${API_BASE}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
 
-  const listRes = await fetch(listUrl, { headers: headers(token) });
-  if (!listRes.ok) {
-    throw new Error(`Failed to list PR comments: ${listRes.status} ${await listRes.text()}`);
+  // Walk every page so a busy PR doesn't hide our earlier comment (→ duplicates).
+  let existing: GitHubComment | undefined;
+  for (let page = 1; !existing; page++) {
+    const listRes = await fetch(`${listUrl}?per_page=100&page=${page}`, { headers: headers(token) });
+    if (!listRes.ok) {
+      throw new Error(`Failed to list PR comments: ${listRes.status} ${await listRes.text()}`);
+    }
+    const comments = (await listRes.json()) as GitHubComment[];
+    existing = comments.find((c) => c.body.includes(COMMENT_MARKER));
+    if (comments.length < 100) break;
   }
-  const comments = (await listRes.json()) as GitHubComment[];
-  const existing = comments.find((c) => c.body.includes(COMMENT_MARKER));
 
   if (existing) {
     const updateUrl = `${API_BASE}/repos/${owner}/${repo}/issues/comments/${existing.id}`;
