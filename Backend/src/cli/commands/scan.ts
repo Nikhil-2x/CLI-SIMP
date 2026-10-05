@@ -5,7 +5,7 @@ import { runAssessment } from "../../core/engine/index.js";
 import { loadConfig } from "../../core/config/index.js";
 import type { ScanContext } from "../../core/scanners/types.js";
 import { getChangedFiles, getGitInfo } from "../lib/git.js";
-import { saveReport, type ReportFile } from "../lib/report.js";
+import { buildReportFile, saveReport } from "../lib/report.js";
 import { summaryLines } from "../lib/output.js";
 
 export interface ScanOptions {
@@ -72,21 +72,7 @@ export async function scanCommand(targetPath: string, options: ScanOptions): Pro
     },
   });
 
-  const report: ReportFile = {
-    version: 1,
-    projectPath,
-    ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),
-    ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } : {}),
-    generatedAt: new Date().toISOString(),
-    scannerResults: result.scannerResults.map((r) => ({
-      scanner: r.scanner,
-      findingCount: r.findings.length,
-      ...(r.error ? { error: r.error } : {}),
-    })),
-    ...(changedFiles ? { changedFiles } : {}),
-    rawFindingCount: result.rawFindingCount,
-    findings: result.findings,
-  };
+  const report = buildReportFile(result, { projectPath, ...gitInfo, ...(changedFiles ? { changedFiles } : {}) });
 
   const outputPath = await saveReport(projectPath, report, options.output);
 

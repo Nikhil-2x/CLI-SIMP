@@ -41,6 +41,7 @@ export async function runAllScanners(
         findings: [],
         rawOutput: null,
         error: `${scanner.name} is not installed or not on PATH — skipped`,
+        skipped: true,
       };
     } else {
       try {

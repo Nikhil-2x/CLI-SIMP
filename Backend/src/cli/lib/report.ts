@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CorrelatedFinding } from "../../core/correlation/types.js";
 import type { RiskOutput } from "../../core/risk/types.js";
+import type { AssessmentResult } from "../../core/engine/index.js";
 
 const STATE_DIR = ".wm-sentinel";
 const LAST_REPORT_FILE = "last-report.json";
@@ -13,11 +14,34 @@ export interface ReportFile {
   branch?: string;
   commitSha?: string;
   generatedAt: string;
-  scannerResults: Array<{ scanner: string; findingCount: number; error?: string }>;
+  scannerResults: Array<{ scanner: string; findingCount: number; error?: string; skipped?: boolean }>;
   /** PR mode: the changed-file list this scan was restricted to. */
   changedFiles?: string[];
   rawFindingCount: number;
   findings: Array<CorrelatedFinding & RiskOutput>;
+}
+
+/** Shapes an engine result into the on-disk / API report format. Raw scanner output is not kept. */
+export function buildReportFile(
+  result: AssessmentResult,
+  meta: { projectPath: string; branch?: string; commitSha?: string; changedFiles?: string[] }
+): ReportFile {
+  return {
+    version: 1,
+    projectPath: meta.projectPath,
+    ...(meta.branch ? { branch: meta.branch } : {}),
+    ...(meta.commitSha ? { commitSha: meta.commitSha } : {}),
+    generatedAt: new Date().toISOString(),
+    scannerResults: result.scannerResults.map((r) => ({
+      scanner: r.scanner,
+      findingCount: r.findings.length,
+      ...(r.error ? { error: r.error } : {}),
+      ...(r.skipped ? { skipped: true } : {}),
+    })),
+    ...(meta.changedFiles ? { changedFiles: meta.changedFiles } : {}),
+    rawFindingCount: result.rawFindingCount,
+    findings: result.findings,
+  };
 }
 
 export async function saveReport(

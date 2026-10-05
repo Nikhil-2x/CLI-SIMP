@@ -3,7 +3,9 @@
 //
 // Two raw findings are merged when any of these hold:
 //   1. Identical fingerprint (exact duplicate, e.g. re-run of the same scanner)
-//   2. Same file, overlapping/adjacent line ranges, and same category
+//   2. Same file, overlapping/adjacent line ranges, and same category —
+//      unless both carry a CWE and the CWEs differ (exec() on line 7 and
+//      eval() on line 8 are both INJECTION, but need separate fixes)
 //   3. Same file and same CWE, within ~20 lines
 //   4. Same endpoint and same category (for dynamic/API findings without a file)
 
@@ -27,14 +29,16 @@ function linesOverlap(a: SecurityFinding, b: SecurityFinding, proximity = LINE_P
 function isSameIssue(a: SecurityFinding, b: SecurityFinding): boolean {
   if (a.fingerprint === b.fingerprint) return true;
 
+  const differentCwe = Boolean(a.cweId && b.cweId && a.cweId !== b.cweId);
+
   if (a.filePath && a.filePath === b.filePath) {
-    if (a.category === b.category && linesOverlap(a, b)) return true;
+    if (a.category === b.category && !differentCwe && linesOverlap(a, b)) return true;
     // Same CWE only counts as the same issue when it's nearby — otherwise 59
     // separate header problems in one nginx.conf collapse into one finding.
     if (a.cweId && a.cweId === b.cweId && linesOverlap(a, b, CWE_PROXIMITY)) return true;
   }
 
-  if (a.endpoint && a.endpoint === b.endpoint && a.category === b.category) return true;
+  if (a.endpoint && a.endpoint === b.endpoint && a.category === b.category && !differentCwe) return true;
 
   return false;
 }
@@ -59,10 +63,16 @@ class DisjointSet {
   }
 }
 
+// Primary = highest severity, then highest confidence, so when Semgrep (90%)
+// and a heuristic WM rule (40%) flag the same line, the title and
+// description come from Semgrep. Fingerprint order keeps ties deterministic.
 function mergeGroup(members: SecurityFinding[]): CorrelatedFinding {
-  const primary = [...members]
-    .sort((a, b) => a.fingerprint.localeCompare(b.fingerprint))
-    .reduce((best, f) => (SEVERITY_RANK[f.severity] > SEVERITY_RANK[best.severity] ? f : best));
+  const primary = [...members].sort(
+    (a, b) =>
+      SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
+      b.confidence - a.confidence ||
+      a.fingerprint.localeCompare(b.fingerprint)
+  )[0]!;
 
   const id = createHash("sha1")
     .update(members.map((m) => m.fingerprint).sort().join("|"))
