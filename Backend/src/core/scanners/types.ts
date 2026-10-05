@@ -20,6 +20,8 @@ export interface ScannerResult {
   findings: SecurityFinding[];
   rawOutput: unknown;
   error?: string;
+  /** True when the tool isn't installed — not a failure. */
+  skipped?: boolean;
 }
 
 export interface Scanner {

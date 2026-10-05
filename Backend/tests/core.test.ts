@@ -102,6 +102,22 @@ test("same CWE far apart in one file is NOT merged; nearby is", () => {
   assert.equal(out.length, 2);
 });
 
+test("adjacent same-category findings with different CWEs stay separate", () => {
+  const out = correlateFindings([
+    finding({ cweId: "CWE-78", lineStart: 7, lineEnd: 7, title: "exec" }),
+    finding({ cweId: "CWE-95", lineStart: 8, lineEnd: 8, title: "eval" }),
+  ]);
+  assert.deepEqual(out.map((f) => f.title).sort(), ["eval", "exec"]);
+});
+
+test("merged finding takes title/description from the most confident member at top severity", () => {
+  const [merged] = correlateFindings([
+    finding({ source: "CUSTOM", severity: "HIGH", confidence: 40, description: "heuristic match" }),
+    finding({ source: "SEMGREP", severity: "HIGH", confidence: 90, description: "semgrep says" }),
+  ]);
+  assert.equal(merged!.description, "semgrep says");
+});
+
 test("code context: tests/docs get tagged and confidence-capped, lockfiles don't", async () => {
   const { applyCodeContext } = await import("../src/core/engine/postprocess.js");
   const [t, d, p, dep] = applyCodeContext([
@@ -141,4 +157,16 @@ test("WM rules: eval in a regex/comment and env-var-name 'secrets' are not flagg
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("API import validation accepts a CLI report and rejects bad enum values", async () => {
+  const { validateReportFile } = await import("../src/services/reportValidation.js");
+  const findings = scoreFindings(correlateFindings([finding(), finding({ filePath: "z.ts", source: "GITLEAKS" })]));
+  const report = JSON.parse(JSON.stringify({
+    version: 1, projectPath: ".", generatedAt: new Date().toISOString(),
+    scannerResults: [{ scanner: "SEMGREP", findingCount: 1 }], rawFindingCount: 2, findings,
+  }));
+  assert.equal(validateReportFile(report).findings.length, 2);
+  report.findings[0].severity = "SEVERE";
+  assert.throws(() => validateReportFile(report), /findings\[0\]\.severity/);
 });

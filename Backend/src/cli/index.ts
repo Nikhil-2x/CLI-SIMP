@@ -6,6 +6,7 @@ import { findingsCommand } from "./commands/findings.js";
 import { verifyCommand } from "./commands/verify.js";
 import { reportCommand } from "./commands/report.js";
 import { githubCommentCommand } from "./commands/github-comment.js";
+import { pushCommand } from "./commands/push.js";
 
 const program = new Command();
 
@@ -60,5 +61,13 @@ program
   .argument("[path]", "project path", ".")
   .option("--base <branch>", "base branch to diff against (defaults to $GITHUB_BASE_REF or \"main\")")
   .action(githubCommentCommand);
+
+program
+  .command("push")
+  .description("Upload the last scan report to the WM-Sentinel API (dashboard)")
+  .argument("[path]", "project path", ".")
+  .requiredOption("--project <id>", "project id in the WM-Sentinel API")
+  .option("--api <url>", "API base URL (defaults to $WM_SENTINEL_API_URL or http://localhost:4000)")
+  .action(pushCommand);
 
 program.parseAsync(process.argv);
