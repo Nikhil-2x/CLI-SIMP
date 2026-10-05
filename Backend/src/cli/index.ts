@@ -7,6 +7,7 @@ import { verifyCommand } from "./commands/verify.js";
 import { reportCommand } from "./commands/report.js";
 import { githubCommentCommand } from "./commands/github-comment.js";
 import { pushCommand } from "./commands/push.js";
+import { triageCommand } from "./commands/triage.js";
 
 const program = new Command();
 
@@ -69,5 +70,14 @@ program
   .requiredOption("--project <id>", "project id in the WM-Sentinel API")
   .option("--api <url>", "API base URL (defaults to $WM_SENTINEL_API_URL or http://localhost:4000)")
   .action(pushCommand);
+
+program
+  .command("triage")
+  .description("Build an agent worklist + prompt from the last scan, for validating findings against the real code")
+  .argument("[path]", "project path", ".")
+  .option("-o, --output <dir>", "output directory (default <path>/wm-sentinel-triage)")
+  .option("--limit <n>", "how many findings to put in the worklist", "25")
+  .option("--include-non-prod", "also include findings in tests/docs/generated code")
+  .action(triageCommand);
 
 program.parseAsync(process.argv);
