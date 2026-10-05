@@ -27,6 +27,8 @@ model Project {
   name           String
   repositoryUrl  String
   defaultBranch  String   @default("main")
+  // Local/test checkout the worker scans. Never a production host.
+  localPath      String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -59,6 +61,11 @@ model Assessment {
   commitSha   String?
   branch      String?
 
+  // PR scans: the files the scan was restricted to.
+  changedFiles    String[] @default([])
+  rawFindingCount Int      @default(0)
+  error           String?
+
   startedAt   DateTime?
   completedAt DateTime?
   createdAt   DateTime         @default(now())
@@ -69,6 +76,7 @@ model Assessment {
   prFindings  PRFinding[]
 
   @@index([projectId])
+  @@index([status, createdAt]) // worker queue
 }
 
 enum ScannerType {
@@ -154,7 +162,11 @@ model Finding {
   assessmentId String
   assessment   Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
 
+  // Correlated finding id. Changes when the group changes, so cross-scan
+  // matching uses memberFingerprints instead.
   fingerprint  String
+  // Stable fingerprints of every raw finding merged into this one.
+  memberFingerprints String[]  @default([])
 
   title        String
   description  String
@@ -163,7 +175,9 @@ model Finding {
   confidence   Int             @default(0)
 
   category     FindingCategory
-  source       FindingSource
+  source       FindingSource   // primary scanner
+  sources      FindingSource[] @default([])
+  context      String?         // production | test | docs | generated
 
   filePath     String?
   lineStart    Int?

@@ -1,0 +1,1343 @@
+
+❯ <ide_opened_file>The user opened the file
+  c:\Users\student\Desktop\coding\CLI-SIMP\Backend\package.json in the IDE.
+  This may or may not be related to the current task.</ide_opened_file>
+
+❯ read this code base and implement next steps in the plan
+  For part which have been already implemented are in @cli-simp.txt
+  ⎿  Read cli-simp.txt (1369 lines)
+
+● I'll start by looking at the current state of the repo, since the transcript
+  ended with a pending correlation fix and Milestone 3 after that.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now reading the core code: correlation, engine, types, schema, and the stubbed
+  API files.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now the CLI commands, PR pieces and risk/config, which persistence will hook
+  into.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● I've confirmed the plan: fix the correlation issue first, then tackle
+  Milestone 3 (Express API, worker, Neon persistence). I'll check a few more
+  files to pin down how persistence should fit in.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Before designing the schema change I'll check what evidence the adapters
+  attach, since the plan says not to store secrets in the database.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● No adapter attaches evidence, so the only stored evidence will be what I
+  generate. I'll check that the WM-SECRET rule doesn't echo the matched value
+  into its description.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Nothing stores secret values, and the evidence I generate will reuse the same
+  masked titles. Starting with the pending correlation fix:
+
+● Update(Backend\src\core\correlation\index.ts)
+  ⎿  Added 3 lines, removed 1 line
+       3  //
+       4  // Two raw findings are merged when any of these hold:
+       5  //   1. Identical fingerprint (exact duplicate, e.g. re-run of 
+          the same scanner)
+       6 -//   2. Same file, overlapping/adjacent line ranges, and same c
+         -ategory                                                        
+       6 +//   2. Same file, overlapping/adjacent line ranges, and same c
+         +ategory —                                                      
+       7 +//      unless both carry a CWE and the CWEs differ (exec() on 
+         +line 7 and                                                     
+       8 +//      eval() on line 8 are both INJECTION, but need separate 
+         +fixes)                                                         
+       9  //   3. Same file and same CWE, within ~20 lines
+      10  //   4. Same endpoint and same category (for dynamic/API findin
+          gs without a file)
+      11  
+
+● Update(Backend\src\core\correlation\index.ts)
+  ⎿  Added 3 lines, removed 1 line
+      29  function isSameIssue(a: SecurityFinding, b: SecurityFinding): b
+          oolean {
+      30    if (a.fingerprint === b.fingerprint) return true;
+      31  
+      32 +  const differentCwe = Boolean(a.cweId && b.cweId && a.cweId !=
+         += b.cweId);                                                    
+      33 +                                                               
+      34    if (a.filePath && a.filePath === b.filePath) {
+      33 -    if (a.category === b.category && linesOverlap(a, b)) return
+         - true;                                                         
+      35 +    if (a.category === b.category && !differentCwe && linesOver
+         +lap(a, b)) return true;                                        
+      36      // Same CWE only counts as the same issue when it's nearby 
+          — otherwise 59
+      37      // separate header problems in one nginx.conf collapse into
+           one finding.
+      38      if (a.cweId && a.cweId === b.cweId && linesOverlap(a, b, CW
+          E_PROXIMITY)) return true;
+
+● Update(Backend\src\core\correlation\index.ts)
+  ⎿  Added 1 line, removed 1 line
+      38      if (a.cweId && a.cweId === b.cweId && linesOverlap(a, b, CW
+          E_PROXIMITY)) return true;
+      39    }
+      40  
+      41 -  if (a.endpoint && a.endpoint === b.endpoint && a.category ===
+         - b.category) return true;                                      
+      41 +  if (a.endpoint && a.endpoint === b.endpoint && a.category ===
+         + b.category && !differentCwe) return true;                     
+      42  
+      43    return false;
+      44  }
+
+● Update(Backend\src\core\correlation\index.ts)
+  ⎿  Added 9 lines, removed 3 lines
+      63    }
+      64  }
+      65  
+      66 +// Primary = highest severity, then highest confidence, so when
+         + Semgrep (90%)                                                 
+      67 +// and a heuristic WM rule (40%) flag the same line, the title 
+         +and                                                            
+      68 +// description come from Semgrep. Fingerprint order keeps ties 
+         +deterministic.                                                 
+      69  function mergeGroup(members: SecurityFinding[]): CorrelatedFind
+          ing {
+      67 -  const primary = [...members]                                 
+      68 -    .sort((a, b) => a.fingerprint.localeCompare(b.fingerprint))
+      69 -    .reduce((best, f) => (SEVERITY_RANK[f.severity] > SEVERITY_
+         -RANK[best.severity] ? f : best));                              
+      70 +  const primary = [...members].sort(                           
+      71 +    (a, b) =>                                                  
+      72 +      SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || 
+      73 +      b.confidence - a.confidence ||                           
+      74 +      a.fingerprint.localeCompare(b.fingerprint)               
+      75 +  )[0]!;                                                       
+      76  
+      77    const id = createHash("sha1")
+      78      .update(members.map((m) => m.fingerprint).sort().join("|"))
+
+● Update(Backend\tests\core.test.ts)
+  ⎿  Added 16 lines
+      102    assert.equal(out.length, 2);
+      103  });
+      104  
+      105 +test("adjacent same-category findings with different CWEs stay
+          + separate", () => {                                           
+      106 +  const out = correlateFindings([                             
+      107 +    finding({ cweId: "CWE-78", lineStart: 7, lineEnd: 7, title
+          +: "exec" }),                                                  
+      108 +    finding({ cweId: "CWE-95", lineStart: 8, lineEnd: 8, title
+          +: "eval" }),                                                  
+      109 +  ]);                                                         
+      110 +  assert.deepEqual(out.map((f) => f.title).sort(), ["eval", "e
+          +xec"]);                                                       
+      111 +});                                                           
+      112 +                                                              
+      113 +test("merged finding takes title/description from the most con
+          +fident member at top severity", () => {                       
+      114 +  const [merged] = correlateFindings([                        
+      115 +    finding({ source: "CUSTOM", severity: "HIGH", confidence: 
+          +40, description: "heuristic match" }),                        
+      116 +    finding({ source: "SEMGREP", severity: "HIGH", confidence:
+          + 90, description: "semgrep says" }),                          
+      117 +  ]);                                                         
+      118 +  assert.equal(merged!.description, "semgrep says");          
+      119 +});                                                           
+      120 +                                                              
+      121  test("code context: tests/docs get tagged and confidence-cappe
+           d, lockfiles don't", async () => {
+      122    const { applyCodeContext } = await import("../src/core/engin
+           e/postprocess.js");
+      123    const [t, d, p, dep] = applyCodeContext([
+
+● Moving on to Milestone 3: I'll update the Finding table schema to store
+  correlated data (sources and member fingerprints) so findings can be tracked
+  across scans, and add a local path field to Project for the worker to scan.
+
+● Update(Backend\prisma\schema.prisma)
+  ⎿  Added 2 lines
+      27    name           String
+      28    repositoryUrl  String
+      29    defaultBranch  String   @default("main")
+      30 +  // Local/test checkout the worker scans. Never a production h
+         +ost.                                                           
+      31 +  localPath      String?                                       
+      32    createdAt      DateTime @default(now())
+      33    updatedAt      DateTime @updatedAt
+      34  
+
+● Update(Backend\prisma\schema.prisma)
+  ⎿  Added 5 lines
+      61    commitSha   String?
+      62    branch      String?
+      63  
+      64 +  // PR scans: the files the scan was restricted to.           
+      65 +  changedFiles    String[] @default([])                        
+      66 +  rawFindingCount Int      @default(0)                         
+      67 +  error           String?                                      
+      68 +                                                               
+      69    startedAt   DateTime?
+      70    completedAt DateTime?
+      71    createdAt   DateTime         @default(now())
+
+● Update(Backend\prisma\schema.prisma)
+  ⎿  Added 7 lines, removed 1 line
+      161    assessmentId String
+      162    assessment   Assessment      @relation(fields: [assessmentId
+           ], references: [id], onDelete: Cascade)
+      163  
+      164 +  // Correlated finding id. Changes when the group changes, so
+          + cross-scan                                                   
+      165 +  // matching uses memberFingerprints instead.                
+      166    fingerprint  String
+      167 +  // Stable fingerprints of every raw finding merged into this
+          + one.                                                         
+      168 +  memberFingerprints String[]  @default([])                   
+      169  
+      170    title        String
+      171    description  String
+     ...
+      174    confidence   Int             @default(0)
+      175  
+      176    category     FindingCategory
+      173 -  source       FindingSource                                  
+      177 +  source       FindingSource   // primary scanner             
+      178 +  sources      FindingSource[] @default([])                   
+      179 +  context      String?         // production | test | docs | g
+          +enerated                                                      
+      180  
+      181    filePath     String?
+      182    lineStart    Int?
+
+● Write(Backend\prisma\migrations\20261005120000_persistence\migration.sql)
+  ⎿  Wrote 15 lines to
+     Backend\prisma\migrations\20261005120000_persistence\migration.sql
+       1 -- AlterTable
+       2 ALTER TABLE "Project" ADD COLUMN     "localPath" TEXT;
+       3
+       4 -- AlterTable
+       5 ALTER TABLE "Assessment" ADD COLUMN     "changedFiles" TEXT[] DE
+       6 ADD COLUMN     "error" TEXT,
+       7 ADD COLUMN     "rawFindingCount" INTEGER NOT NULL DEFAULT 0;
+       8
+       9 -- AlterTable
+      10 ALTER TABLE "Finding" ADD COLUMN     "context" TEXT,
+     … +8 lines (ctrl+o to expand)
+
+● Update(Backend\prisma\schema.prisma)
+  ⎿  Added 1 line
+      76    prFindings  PRFinding[]
+      77  
+      78    @@index([projectId])
+      79 +  @@index([status, createdAt]) // worker queue                 
+      80  }
+      81  
+      82  enum ScannerType {
+
+● Next, a shared buildReportFile so the CLI and the worker produce the same
+  report shape.
+● Update(Backend\src\cli\lib\report.ts)
+  ⎿  Added 22 lines
+      20    findings: Array<CorrelatedFinding & RiskOutput>;
+      21  }
+      22  
+      23 +/** Shapes an engine result into the on-disk / API report forma
+         +t. Raw scanner output is not kept. */                          
+      24 +export function buildReportFile(                               
+      25 +  result: AssessmentResult,                                    
+      26 +  meta: { projectPath: string; branch?: string; commitSha?: str
+         +ing; changedFiles?: string[] }                                 
+      27 +): ReportFile {                                                
+      28 +  return {                                                     
+      29 +    version: 1,                                                
+      30 +    projectPath: meta.projectPath,                             
+      31 +    ...(meta.branch ? { branch: meta.branch } : {}),           
+      32 +    ...(meta.commitSha ? { commitSha: meta.commitSha } : {}),  
+      33 +    generatedAt: new Date().toISOString(),                     
+      34 +    scannerResults: result.scannerResults.map((r) => ({        
+      35 +      scanner: r.scanner,                                      
+      36 +      findingCount: r.findings.length,                         
+      37 +      ...(r.error ? { error: r.error } : {}),                  
+      38 +    })),                                                       
+      39 +    ...(meta.changedFiles ? { changedFiles: meta.changedFiles }
+         + : {}),                                                        
+      40 +    rawFindingCount: result.rawFindingCount,                   
+      41 +    findings: result.findings,                                 
+      42 +  };                                                           
+      43 +}                                                              
+      44 +                                                               
+      45  export async function saveReport(
+      46    projectPath: string,
+      47    report: ReportFile,
+
+● Update(Backend\src\cli\lib\report.ts)
+  ⎿  Added 1 line
+      2  import { join } from "node:path";
+      3  import type { CorrelatedFinding } from "../../core/correlation/t
+         ypes.js";
+      4  import type { RiskOutput } from "../../core/risk/types.js";
+      5 +import type { AssessmentResult } from "../../core/engine/index.j
+        +s";                                                             
+      6  
+      7  const STATE_DIR = ".wm-sentinel";
+      8  const LAST_REPORT_FILE = "last-report.json";
+
+● Update(Backend\src\cli\commands\scan.ts)
+  ⎿  Added 1 line, removed 15 lines
+      72      },
+      73    });
+      74  
+      75 -  const report: ReportFile = {                                 
+      76 -    version: 1,                                                
+      77 -    projectPath,                                               
+      78 -    ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),     
+      79 -    ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } : 
+         -{}),                                                           
+      80 -    generatedAt: new Date().toISOString(),                     
+      81 -    scannerResults: result.scannerResults.map((r) => ({        
+      82 -      scanner: r.scanner,                                      
+      83 -      findingCount: r.findings.length,                         
+      84 -      ...(r.error ? { error: r.error } : {}),                  
+      85 -    })),                                                       
+      86 -    ...(changedFiles ? { changedFiles } : {}),                 
+      87 -    rawFindingCount: result.rawFindingCount,                   
+      88 -    findings: result.findings,                                 
+      89 -  };                                                           
+      75 +  const report = buildReportFile(result, { projectPath, ...gitI
+         +nfo, ...(changedFiles ? { changedFiles } : {}) });             
+      76  
+      77    const outputPath = await saveReport(projectPath, report, opti
+          ons.output);
+      78  
+
+● Update(Backend\src\cli\commands\scan.ts)
+  ⎿  Added 1 line, removed 1 line
+       5  import { loadConfig } from "../../core/config/index.js";
+       6  import type { ScanContext } from "../../core/scanners/types.js"
+          ;
+       7  import { getChangedFiles, getGitInfo } from "../lib/git.js";
+       8 -import { saveReport, type ReportFile } from "../lib/report.js";
+       8 +import { buildReportFile, saveReport } from "../lib/report.js";
+       9  import { summaryLines } from "../lib/output.js";
+      10  
+      11  export interface ScanOptions {
+
+● Scanner results don't currently say whether a scanner was skipped or failed.
+  The database's ScannerRun status needs that, so I'll add a skipped flag:
+
+● Bash(python - <<'EOF'
+      import re,io…)
+  ⎿  Updated Backend\src\cli\lib\report.ts (+71 -70)
+       1 -import { mkdir, readFile, writeFile } from "node:fs/promises"; 
+       2 -import { join } from "node:path";                              
+       3 -import type { CorrelatedFinding } from "../../core/correlation/
+         -types.js";                                                     
+       4 -import type { RiskOutput } from "../../core/risk/types.js";    
+       5 -import type { AssessmentResult } from "../../core/engine/index.
+         -js";                                                           
+       6 -                                                               
+       7 -const STATE_DIR = ".wm-sentinel";                              
+       8 -const LAST_REPORT_FILE = "last-report.json";                   
+       9 -const DEFAULT_OUTPUT_FILE = "wm-sentinel-report.json";         
+      10 -                                                               
+      11 -export interface ReportFile {                                  
+      12 -  version: 1;                                                  
+      13 -  projectPath: string;                                         
+      14 -  branch?: string;                                             
+      15 -  commitSha?: string;                                          
+      16 -  generatedAt: string;                                         
+      17 -  scannerResults: Array<{ scanner: string; findingCount: number
+         -; error?: string }>;                                           
+      18 -  /** PR mode: the changed-file list this scan was restricted t
+         -o. */                                                          
+      19 -  changedFiles?: string[];                                     
+      20 -  rawFindingCount: number;                                     
+      21 -  findings: Array<CorrelatedFinding & RiskOutput>;             
+      22 -}                                                              
+      23 -                                                               
+      24 -/** Shapes an engine result into the on-disk / API report forma
+         -t. Raw scanner output is not kept. */                          
+      25 -export function buildReportFile(                               
+      26 -  result: AssessmentResult,                                    
+      27 -  meta: { projectPath: string; branch?: string; commitSha?: str
+         -ing; changedFiles?: string[] }                                 
+      28 -): ReportFile {                                                
+      29 -  return {                                                     
+      30 -    version: 1,                                                
+      31 -    projectPath: meta.projectPath,                             
+      32 -    ...(meta.branch ? { branch: meta.branch } : {}),           
+      33 -    ...(meta.commitSha ? { commitSha: meta.commitSha } : {}),  
+      34 -    generatedAt: new Date().toISOString(),                     
+      35 -    scannerResults: result.scannerResults.map((r) => ({        
+      36 -      scanner: r.scanner,                                      
+      37 -      findingCount: r.findings.length,                         
+      38 -      ...(r.error ? { error: r.error } : {}),                  
+      39 -    })),                                                       
+      40 -    ...(meta.changedFiles ? { changedFiles: meta.changedFiles }
+         - : {}),                                                        
+     … 101 more lines (ctrl+o to expand)
+  ⎿  Updated Backend\src\core\scanners\index.ts (+1 -0)
+      41          findings: [],
+      42          rawOutput: null,
+      43          error: `${scanner.name} is not installed or not on PATH
+           — skipped`,
+      44 +        skipped: true,                                         
+      45        };
+      46      } else {
+      47        try {
+  ⎿  Updated Backend\src\core\scanners\types.ts (+2 -0)
+      20    findings: SecurityFinding[];
+      21    rawOutput: unknown;
+      22    error?: string;
+      23 +  /** True when the tool isn't installed — not a failure. */   
+      24 +  skipped?: boolean;                                           
+      25  }
+      26  
+      27  export interface Scanner {
+  ⎿  (what this command changed; a convenience view, not a review or audit
+     of the command)
+
+● Now the persistence layer. I'm starting with the HTTP error helper and the
+  services.
+
+● Write(Backend\src\lib\http.ts)
+  ⎿  Wrote 56 lines to Backend\src\lib\http.ts
+       1 import type { Request } from "express";
+       2
+       3 /** Thrown from services/controllers; the error middleware turns
+          it into a JSON response. */
+       4 export class HttpError extends Error {
+       6     public status: number,
+       7     message: string
+       8   ) {
+       9     super(message);
+      10   }
+     … +60 lines (ctrl+o to expand)
+
+● Write(Backend\src\services\projects.ts)
+  ⎿  Wrote 73 lines to Backend\src\services\projects.ts
+       1 import { isAbsolute, relative, resolve } from "node:path";
+       2 import { stat } from "node:fs/promises";
+       3 import { prisma } from "../lib/prisma.js";
+       4 import { HttpError } from "../lib/http.js";
+       5
+       6 export interface ProjectInput {
+       7   name: string;
+       8   repositoryUrl: string;
+       9   defaultBranch?: string;
+      10   localPath?: string;
+     … +77 lines (ctrl+o to expand)
+
+● Now the assessments service. It handles queueing, the worker's claim step,
+  persisting a report with triage carried over from earlier scans, and
+  rebuilding a report for SARIF/HTML export.
+
+● Write(Backend\src\services\assessments.ts)
+  ⎿  Wrote 277 lines to Backend\src\services\assessments.ts
+       1 // Assessment persistence (plan Phases 13-15). The engine never
+       2 // database: the worker (or an import from the CLI) hands a fini
+         shed
+       3 // ReportFile to persistReport, which writes it in one transacti
+       4
+       5 import type { AssessmentType, FindingStatus, Prisma } from "@pri
+       6 import { prisma } from "../lib/prisma.js";
+       7 import { HttpError } from "../lib/http.js";
+       8 import type { ReportFile } from "../cli/lib/report.js";
+      10 import { getProject } from "./projects.js";
+     … +314 lines (ctrl+o to expand)
+
+● Imported reports go straight into enum columns, so they need validating before
+  they reach Prisma:
+
+● Write(Backend\src\services\reportValidation.ts)
+  ⎿  Wrote 119 lines to Backend\src\services\reportValidation.ts
+       1 // Validates a ReportFile uploaded by `wm-sentinel push` before
+       2 // database. Values land in Postgres enums, so anything unexpect
+         ed is a 400,
+       3 // not a 500 from Prisma.
+       5 import { HttpError } from "../lib/http.js";
+       6 import type { ReportFile } from "../cli/lib/report.js";
+       8 const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+         ;
+       9 const CATEGORIES = [
+         CURITY", "SECRETS",
+     … +131 lines (ctrl+o to expand)
+
+● Write(Backend\src\services\findings.ts)
+  ⎿  Wrote 53 lines to Backend\src\services\findings.ts
+       1 import type { FindingStatus, Prisma } from "@prisma/client";
+       2 import { prisma } from "../lib/prisma.js";
+       3 import { HttpError } from "../lib/http.js";
+       4
+       5 export interface FindingFilters {
+       6   severity?: Prisma.FindingWhereInput["severity"];
+       7   source?: string;
+       8   category?: Prisma.FindingWhereInput["category"];
+       9   status?: FindingStatus;
+      10   context?: string;
+     … +48 lines (ctrl+o to expand)
+
+● That sources cast is clumsy, so I'll swap it for Prisma's own enum types:
+
+● Bash(python - <<'EOF'
+      p='src/services/findings.ts'; s=open(p,encoding='utf-8').read()…)
+  ⎿  Updated Backend\src\services\findings.ts (+5 -5)
+       1 -import type { FindingStatus, Prisma } from "@prisma/client";   
+       1 +import type { FindingCategory, FindingSource, FindingStatus, Pr
+         +isma, Severity } from "@prisma/client";                        
+       2  import { prisma } from "../lib/prisma.js";
+       3  import { HttpError } from "../lib/http.js";
+       4  
+       5  export interface FindingFilters {
+       6 -  severity?: Prisma.FindingWhereInput["severity"];             
+       7 -  source?: string;                                             
+       8 -  category?: Prisma.FindingWhereInput["category"];             
+       6 +  severity?: Severity;                                         
+       7 +  source?: FindingSource;                                      
+       8 +  category?: FindingCategory;                                  
+       9    status?: FindingStatus;
+      10    context?: string;
+      11    take: number;
+     ...
+      19      ...(filters.category ? { category: filters.category } : {})
+          ,
+      20      ...(filters.status ? { status: filters.status } : {}),
+      21      ...(filters.context ? { context: filters.context } : {}),
+      22 -    ...(filters.source ? { sources: { has: filters.source as Pr
+         -isma.FindingWhereInput["source"] & string } } : {}),           
+      22 +    ...(filters.source ? { sources: { has: filters.source } } :
+         + {}),                                                          
+      23    };
+      24    const [total, items] = await Promise.all([
+      25      prisma.finding.count({ where }),
+
+● Now the middleware: API-key auth, CORS and the error handler. The plan forbids
+  exposing anything without care, so if no API key is set the server listens on
+  localhost only.
+
+● Write(Backend\src\services\index.ts)
+  ⎿  Added 4 lines, removed 1 line
+      1 -export {};                                                      
+      1 +export * from "./projects.js";                                  
+      2 +export * from "./assessments.js";                               
+      3 +export * from "./findings.js";                                  
+      4 +export { validateReportFile } from "./reportValidation.js";     
+
+● Write(Backend\src\middleware\index.ts)
+  ⎿  Added 51 lines, removed 1 line
+       1 -export {};                                                     
+       1 +import { timingSafeEqual } from "node:crypto";                 
+       2 +import type { ErrorRequestHandler, RequestHandler } from "expre
+         +ss";                                                           
+       3 +import { Prisma } from "@prisma/client";                       
+       4 +import { HttpError } from "../lib/http.js";                    
+       5 +                                                               
+       6 +/**                                                            
+       7 + * Bearer-token auth for /api. With API_KEY unset the server on
+         +ly listens on                                                  
+       8 + * 127.0.0.1 (see index.ts), so local development needs no key.
+       9 + */                                                            
+      10 +export function requireApiKey(apiKey: string | undefined): Requ
+         +estHandler {                                                   
+      11 +  if (!apiKey) return (_req, _res, next) => next();            
+      12 +  const expected = Buffer.from(apiKey);                        
+      13 +  return (req, _res, next) => {                                
+      14 +    const header = req.get("authorization") ?? "";             
+      15 +    const given = Buffer.from(header.startsWith("Bearer ") ? he
+         +ader.slice(7) : "");                                           
+      16 +    if (given.length !== expected.length || !timingSafeEqual(gi
+         +ven, expected)) {                                              
+      17 +      return next(new HttpError(401, "Missing or invalid API ke
+         +y"));                                                          
+      18 +    }                                                          
+      19 +    next();                                                    
+      20 +  };                                                           
+      21 +}                                                              
+      22 +                                                               
+      23 +/** Lets the Next.js dashboard (a different origin) call the AP
+         +I. */                                                          
+      24 +export function cors(allowedOrigins: string[]): RequestHandler 
+         +{                                                              
+      25 +  return (req, res, next) => {                                 
+      26 +    const origin = req.get("origin");                          
+      27 +    if (origin && allowedOrigins.includes(origin)) {           
+      28 +      res.set("Access-Control-Allow-Origin", origin);          
+      29 +      res.set("Vary", "Origin");                               
+      30 +      res.set("Access-Control-Allow-Headers", "Authorization, C
+         +ontent-Type");                                                 
+      31 +      res.set("Access-Control-Allow-Methods", "GET, POST, PATCH
+         +, OPTIONS");                                                   
+      32 +    }                                                          
+      33 +    if (req.method === "OPTIONS") return void res.sendStatus(20
+         +4);                                                            
+      34 +    next();                                                    
+      35 +  };                                                           
+      36 +}                                                              
+      37 +                                                               
+      38 +export const notFound: RequestHandler = (_req, _res, next) => n
+         +ext(new HttpError(404, "Not found"));                          
+      39 +                                                               
+      40 +export const errorHandler: ErrorRequestHandler = (err, _req, re
+         +s, _next) => {                                                 
+      41 +  if (err instanceof HttpError) return void res.status(err.stat
+         +us).json({ error: err.message });                              
+      42 +  // body-parser errors (bad JSON, too large) carry their own s
+         +tatus.                                                         
+      43 +  if (typeof err?.status === "number" && err.status < 500) {   
+      44 +    return void res.status(err.status).json({ error: err.messag
+         +e });                                                          
+      45 +  }                                                            
+      46 +  if (err instanceof Prisma.PrismaClientKnownRequestError && er
+         +r.code === "P2025") {                                          
+      47 +    return void res.status(404).json({ error: "Not found" });  
+      48 +  }                                                            
+      49 +  console.error(err);                                          
+      50 +  res.status(500).json({ error: "Internal server error" });    
+      51 +};                                                             
+
+● Write(Backend\src\controllers\index.ts)
+  ⎿  Added 138 lines, removed 1 line
+        1 -export {};                                                    
+        1 +// HTTP handlers: parse/validate the request, call a service, 
+          +send JSON.                                                    
+        2 +// Express 5 forwards rejected promises to the error middlewar
+          +e.                                                            
+        3 +                                                              
+        4 +import type { Request, Response } from "express";             
+        5 +import {                                                      
+        6 +  bodyObject,                                                 
+        7 +  HttpError,                                                  
+        8 +  oneOf,                                                      
+        9 +  optionalString,                                             
+       10 +  queryInt,                                                   
+       11 +  queryString,                                                
+       12 +  requiredString,                                             
+       13 +} from "../lib/http.js";                                      
+       14 +import * as projects from "../services/projects.js";          
+       15 +import * as assessments from "../services/assessments.js";    
+       16 +import * as findings from "../services/findings.js";          
+       17 +import { validateReportFile } from "../services/reportValidati
+          +on.js";                                                       
+       18 +import { toHtml, toSarif } from "../core/report/index.js";    
+       19 +                                                              
+       20 +const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO
+          +"] as const;                                                  
+       21 +const CATEGORIES = [                                          
+       22 +  "AUTHENTICATION", "AUTHORIZATION", "INPUT_VALIDATION", "API_
+          +SECURITY", "SECRETS",                                         
+       23 +  "DEPENDENCY", "INJECTION", "CONFIGURATION", "CRYPTOGRAPHY", 
+          +"OTHER",                                                      
+       24 +] as const;                                                   
+       25 +const SOURCES = ["SEMGREP", "SONARQUBE", "BANDIT", "GITLEAKS",
+          + "OSV", "TRIVY", "ZAP", "NUCLEI", "CUSTOM"] as const;         
+       26 +const FINDING_STATUSES = ["OPEN", "CONFIRMED", "FALSE_POSITIVE
+          +", "FIXED", "RETEST_REQUIRED"] as const;                      
+       27 +const CONTEXTS = ["production", "test", "docs", "generated"] a
+          +s const;                                                      
+       28 +// RETEST needs a target finding; it goes through `wm-sentinel
+          + verify` for now.                                             
+       29 +const QUEUEABLE_TYPES = ["FULL", "PR", "MANUAL"] as const;    
+       30 +                                                              
+       31 +const param = (req: Request, name: string) => {               
+       32 +  const value = req.params[name];                             
+       33 +  if (typeof value !== "string" || !value) throw new HttpError
+          +(400, `Missing "${name}"`);                                   
+       34 +  return value;                                               
+       35 +};                                                            
+       36 +                                                              
+       37 +function projectInput(body: Record<string, unknown>, partial: 
+          +boolean) {                                                    
+       38 +  const read = partial ? optionalString : requiredString;     
+       39 +  const name = read(body, "name");                            
+       40 +  const repositoryUrl = read(body, "repositoryUrl");          
+       41 +  const defaultBranch = optionalString(body, "defaultBranch");
+       42 +  const localPath = optionalString(body, "localPath");        
+       43 +  return {                                                    
+       44 +    ...(name ? { name } : {}),                                
+       45 +    ...(repositoryUrl ? { repositoryUrl } : {}),              
+       46 +    ...(defaultBranch ? { defaultBranch } : {}),              
+       47 +    ...(localPath ? { localPath } : {}),                      
+       48 +  };                                                          
+       49 +}                                                             
+       50 +                                                              
+       51 +// --- projects ----------------------------------------------
+          +----------------                                              
+       52 +                                                              
+       53 +export async function listProjects(_req: Request, res: Respons
+          +e) {                                                          
+       54 +  res.json(await projects.listProjects());                    
+       55 +}                                                             
+       56 +                                                              
+       57 +export async function getProject(req: Request, res: Response) 
+          +{                                                             
+       58 +  res.json(await projects.getProject(param(req, "id")));      
+       59 +}                                                             
+       60 +                                                              
+       61 +export async function createProject(req: Request, res: Respons
+          +e) {                                                          
+       62 +  const input = projectInput(bodyObject(req), false) as projec
+          +ts.ProjectInput;                                              
+       63 +  res.status(201).json(await projects.createProject(input));  
+       64 +}                                                             
+       65 +                                                              
+       66 +export async function updateProject(req: Request, res: Respons
+          +e) {                                                          
+       67 +  res.json(await projects.updateProject(param(req, "id"), proj
+          +ectInput(bodyObject(req), true)));                            
+       68 +}                                                             
+       69 +                                                              
+       70 +// --- assessments -------------------------------------------
+          +----------------                                              
+       71 +                                                              
+       72 +export async function listAssessments(req: Request, res: Respo
+          +nse) {                                                        
+       73 +  const projectId = param(req, "id");                         
+       74 +  await projects.getProject(projectId);                       
+       75 +  res.json(await assessments.listAssessments(projectId));     
+       76 +}                                                             
+       77 +                                                              
+       78 +export async function enqueueAssessment(req: Request, res: Res
+          +ponse) {                                                      
+       79 +  const body = req.body && typeof req.body === "object" ? (req
+          +.body as Record<string, unknown>) : {};                       
+       80 +  const type = oneOf(body.type, QUEUEABLE_TYPES, "type") ?? "F
+          +ULL";                                                         
+       81 +  res.status(202).json(await assessments.enqueueAssessment(par
+          +am(req, "id"), type));                                        
+       82 +}                                                             
+       83 +                                                              
+       84 +export async function importAssessment(req: Request, res: Resp
+          +onse) {                                                       
+       85 +  const report = validateReportFile(req.body);                
+       86 +  res.status(201).json(await assessments.importReport(param(re
+          +q, "id"), report));                                           
+       87 +}                                                             
+       88 +                                                              
+       89 +export async function getAssessment(req: Request, res: Respons
+          +e) {                                                          
+       90 +  res.json(await assessments.getAssessment(param(req, "id")));
+       91 +}                                                             
+       92 +                                                              
+       93 +export async function listAssessmentFindings(req: Request, res
+          +: Response) {                                                 
+       94 +  const id = param(req, "id");                                
+       95 +  await assessments.getAssessment(id);                        
+       96 +  const severity = oneOf(queryString(req, "severity")?.toUpper
+          +Case(), SEVERITIES, "severity");                              
+       97 +  const category = oneOf(queryString(req, "category")?.toUpper
+          +Case(), CATEGORIES, "category");                              
+       98 +  const source = oneOf(queryString(req, "source")?.toUpperCase
+          +(), SOURCES, "source");                                       
+       99 +  const status = oneOf(queryString(req, "status")?.toUpperCase
+          +(), FINDING_STATUSES, "status");                              
+      100 +  const context = oneOf(queryString(req, "context")?.toLowerCa
+          +se(), CONTEXTS, "context");                                   
+      101 +  res.json(                                                   
+      102 +    await findings.listFindings(id, {                         
+      103 +      ...(severity ? { severity } : {}),                      
+      104 +      ...(category ? { category } : {}),                      
+      105 +      ...(source ? { source } : {}),                          
+      106 +      ...(status ? { status } : {}),                          
+      107 +      ...(context ? { context } : {}),                        
+      108 +      take: queryInt(req, "limit", 200, 1000),                
+      109 +      skip: queryInt(req, "offset", 0, Number.MAX_SAFE_INTEGER
+          +),                                                            
+      110 +    })                                                        
+      111 +  );                                                          
+      112 +}                                                             
+      113 +                                                              
+      114 +export async function exportAssessmentReport(req: Request, res
+          +: Response) {                                                 
+      115 +  const id = param(req, "id");                                
+      116 +  const format = oneOf(queryString(req, "format")?.toLowerCase
+          +(), ["json", "sarif", "html"] as const, "format") ?? "json";  
+      117 +  const report = await assessments.loadReportFile(id);        
+      118 +  const filename = `wm-sentinel-${id}.${format}`;             
+      119 +  res.set("Content-Disposition", `attachment; filename="${file
+          +name}"`);                                                     
+      120 +  if (format === "html") {                                    
+      121 +    // The report is a static page: no scripts needed, so forb
+          +id them.                                                      
+      122 +    res.set("Content-Security-Policy", "default-src 'none'; st
+          +yle-src 'unsafe-inline'");                                    
+      123 +    return void res.type("html").send(toHtml(report));        
+      124 +  }                                                           
+      125 +  res.json(format === "sarif" ? toSarif(report) : report);    
+      126 +}                                                             
+      127 +                                                              
+      128 +// --- findings ----------------------------------------------
+          +----------------                                              
+      129 +                                                              
+      130 +export async function getFinding(req: Request, res: Response) 
+          +{                                                             
+      131 +  res.json(await findings.getFinding(param(req, "id")));      
+      132 +}                                                             
+      133 +                                                              
+      134 +export async function updateFinding(req: Request, res: Respons
+          +e) {                                                          
+      135 +  const status = oneOf(bodyObject(req).status, FINDING_STATUSE
+          +S, "status");                                                 
+      136 +  if (!status) throw new HttpError(400, `"status" is required`
+          +);                                                            
+      137 +  res.json(await findings.updateFindingStatus(param(req, "id")
+          +, status));                                                   
+      138 +}                                                             
+
+● Routes, then the server entry point:
+
+● Write(Backend\src\routes\index.ts)
+  ⎿  Added 26 lines, removed 3 lines
+       1 -// Express route definitions (projects, assessments, findings, 
+         -evidence,                                                      
+       2 -// pull-requests, reports). Populated in Phase 13.             
+       3 -export {};                                                     
+       1 +// Express routes, mounted under /api (plan Phase 13). Pull-req
+         +uest and                                                       
+       2 +// retest endpoints come with PR persistence.                  
+       3 +                                                               
+       4 +import express, { Router } from "express";                     
+       5 +import * as c from "../controllers/index.js";                  
+       6 +                                                               
+       7 +export const router = Router();                                
+       8 +                                                               
+       9 +// Reports from `wm-sentinel push` can be several MB; everythin
+         +g else stays at the 100kb default.                             
+      10 +router.post("/projects/:id/assessments/import", express.json({ 
+         +limit: "25mb" }), c.importAssessment);                         
+      11 +router.use(express.json());                                    
+      12 +                                                               
+      13 +router.get("/projects", c.listProjects);                       
+      14 +router.post("/projects", c.createProject);                     
+      15 +router.get("/projects/:id", c.getProject);                     
+      16 +router.patch("/projects/:id", c.updateProject);                
+      17 +                                                               
+      18 +router.get("/projects/:id/assessments", c.listAssessments);    
+      19 +router.post("/projects/:id/assessments", c.enqueueAssessment); 
+      20 +                                                               
+      21 +router.get("/assessments/:id", c.getAssessment);               
+      22 +router.get("/assessments/:id/findings", c.listAssessmentFinding
+         +s);                                                            
+      23 +router.get("/assessments/:id/report", c.exportAssessmentReport)
+         +;                                                              
+      24 +                                                               
+      25 +router.get("/findings/:id", c.getFinding);                     
+      26 +router.patch("/findings/:id", c.updateFinding);                
+
+● Write(Backend\src\index.ts)
+  ⎿  Added 17 lines, removed 5 lines
+       1  import express, { type Request, type Response } from "express";
+       2  import dotenv from "dotenv";
+       3 +import { router } from "./routes/index.js";                    
+       4 +import { cors, errorHandler, notFound, requireApiKey } from "./
+         +middleware/index.js";                                          
+       5  
+       6  dotenv.config();
+       7  
+       8  const app = express();
+       7 -const PORT = process.env.PORT || 4000;                         
+       9 +const PORT = Number(process.env.PORT || 4000);                 
+      10 +const API_KEY = process.env.API_KEY || undefined;              
+      11 +// Without an API key the API is unauthenticated, so it only li
+         +stens locally.                                                 
+      12 +const HOST = API_KEY ? process.env.HOST || "0.0.0.0" : "127.0.0
+         +.1";                                                           
+      13 +const CORS_ORIGINS = (process.env.CORS_ORIGIN || "http://localh
+         +ost:3000").split(",").map((o) => o.trim());                    
+      14  
+       9 -// Middleware to parse JSON bodies                             
+      10 -app.use(express.json());                                       
+      15 +app.disable("x-powered-by");                                   
+      16 +app.use(cors(CORS_ORIGINS));                                   
+      17  
+      18  // Basic Route (public by design — wm-sentinel-ignore)
+      19  app.get("/health", (req: Request, res: Response) => {
+      20    res.json({ message: "API Working!" });
+      21  });
+      22  
+      23 +app.use("/api", requireApiKey(API_KEY), router);               
+      24 +                                                               
+      25 +app.use(notFound);                                             
+      26 +app.use(errorHandler);                                         
+      27 +                                                               
+      28  // Start Server
+      18 -app.listen(PORT, () => {                                       
+      19 -  console.log(`Server is listening on http://localhost:${PORT}`
+         -);                                                             
+      29 +app.listen(PORT, HOST, () => {                                 
+      30 +  console.log(`Server is listening on http://${HOST}:${PORT}`);
+      31 +  if (!API_KEY) console.log("API_KEY not set: /api is unauthent
+         +icated and bound to 127.0.0.1 only.");                         
+      32  });
+
+● Now the worker. It polls for PENDING assessments, scans the project's local
+  checkout through the same runAssessment pipeline the CLI uses, and persists
+  the result.
+● Write(Backend\src\worker\index.ts)
+  ⎿  Added 95 lines, removed 3 lines
+       1  // Scanner job worker. Assessments are queued (not run inline i
+          n HTTP
+       2 -// handlers) and picked up here. A simple polling/in-process wo
+         -rker is                                                        
+       3 -// enough for Round 1 — no Kafka/Redis required.               
+       4 -export {};                                                     
+       2 +// handlers) and picked up here. A simple polling worker is eno
+         +ugh for                                                        
+       3 +// Round 1 — no Kafka/Redis required. Run several for paralleli
+         +sm: claiming                                                   
+       4 +// a job is atomic.                                            
+       5 +                                                               
+       6 +import "dotenv/config";                                        
+       7 +import { runAssessment } from "../core/engine/index.js";       
+       8 +import { getChangedFiles, getGitInfo } from "../cli/lib/git.js"
+         +;                                                              
+       9 +import { buildReportFile } from "../cli/lib/report.js";        
+      10 +import {                                                       
+      11 +  claimNextAssessment,                                         
+      12 +  failInterruptedAssessments,                                  
+      13 +  markAssessmentFailed,                                        
+      14 +  persistReport,                                               
+      15 +} from "../services/assessments.js";                           
+      16 +import { checkLocalPath } from "../services/projects.js";      
+      17 +import { prisma } from "../lib/prisma.js";                     
+      18 +                                                               
+      19 +const POLL_MS = Number(process.env.WORKER_POLL_MS || 5000);    
+      20 +                                                               
+      21 +type Job = NonNullable<Awaited<ReturnType<typeof claimNextAsses
+         +sment>>>;                                                      
+      22 +                                                               
+      23 +const log = (msg: string) => console.log(`[worker ${new Date().
+         +toISOString()}] ${msg}`);                                      
+      24 +                                                               
+      25 +export async function processAssessment(job: Job): Promise<void
+         +> {                                                            
+      26 +  const { project } = job;                                     
+      27 +  if (!project.localPath) throw new Error("Project has no local
+         +Path");                                                        
+      28 +  const projectPath = await checkLocalPath(project.localPath); 
+      29 +                                                               
+      30 +  let changedFiles: string[] | undefined;                      
+      31 +  if (job.type === "PR") {                                     
+      32 +    changedFiles = await getChangedFiles(projectPath, project.d
+         +efaultBranch);                                                 
+      33 +    if (!changedFiles.length) {                                
+      34 +      log(`${job.id}: no changes against ${project.defaultBranc
+         +h}, running a full scan`);                                     
+      35 +      changedFiles = undefined;                                
+      36 +    }                                                          
+      37 +  }                                                            
+      38 +                                                               
+      39 +  const gitInfo = await getGitInfo(projectPath);               
+      40 +  const result = await runAssessment(                          
+      41 +    {                                                          
+      42 +      projectPath,                                             
+      43 +      ...(changedFiles ? { changedFiles } : {}),               
+      44 +      ...(gitInfo.commitSha ? { commitSha: gitInfo.commitSha } 
+         +: {}),                                                         
+      45 +      ...(gitInfo.branch ? { branch: gitInfo.branch } : {}),   
+      46 +    },                                                         
+      47 +    {                                                          
+      48 +      hooks: {                                                 
+      49 +        onScannerDone: (r, skipped) =>                         
+      50 +          log(`${job.id}: ${r.scanner} ${skipped ? "skipped (no
+         +t installed)" : `${r.findings.length} finding(s)${r.error ? " —
+         + error" : ""}`}`),                                             
+      51 +      },                                                       
+      52 +    }                                                          
+      53 +  );                                                           
+      54 +                                                               
+      55 +  const report = buildReportFile(result, { projectPath, ...gitI
+         +nfo, ...(changedFiles ? { changedFiles } : {}) });             
+      56 +  await persistReport(job.id, report);                         
+      57 +  log(`${job.id}: completed, ${report.findings.length} finding(
+         +s) from ${report.rawFindingCount} raw`);                       
+      58 +}                                                              
+      59 +                                                               
+      60 +let stopping = false;                                          
+      61 +                                                               
+      62 +async function main() {                                        
+      63 +  const { count } = await failInterruptedAssessments();        
+      64 +  if (count) log(`marked ${count} interrupted assessment(s) as 
+         +FAILED`);                                                      
+      65 +  log(`polling every ${POLL_MS}ms`);                           
+      66 +                                                               
+      67 +  while (!stopping) {                                          
+      68 +    let job: Job | null = null;                                
+      69 +    try {                                                      
+      70 +      job = await claimNextAssessment();                       
+      71 +      if (job) {                                               
+      72 +        log(`${job.id}: ${job.type} scan of "${job.project.name
+         +}" started`);                                                  
+      73 +        await processAssessment(job);                          
+      74 +        continue; // look for the next job right away          
+      75 +      }                                                        
+      76 +    } catch (err) {                                            
+      77 +      const message = err instanceof Error ? err.message : Stri
+         +ng(err);                                                       
+      78 +      log(`${job?.id ?? "poll"}: failed — ${message}`);        
+      79 +      if (job) await markAssessmentFailed(job.id, message).catc
+         +h(() => {});                                                   
+      80 +    }                                                          
+      81 +    await new Promise((r) => setTimeout(r, POLL_MS));          
+      82 +  }                                                            
+      83 +  await prisma.$disconnect();                                  
+      84 +}                                                              
+      85 +                                                               
+      86 +for (const signal of ["SIGINT", "SIGTERM"] as const) {         
+      87 +  process.on(signal, () => {                                   
+      88 +    log(`${signal} received, finishing the current job`);      
+      89 +    stopping = true;                                           
+      90 +  });                                                          
+      91 +}                                                              
+      92 +                                                               
+      93 +main().catch((err) => {                                        
+      94 +  console.error(err);                                          
+      95 +  process.exitCode = 1;                                        
+      96 +});                                                            
+
+● Now wm-sentinel push, which connects the CLI to the API (CLI → Express → Neon
+  in Milestone 3):
+
+● Write(Backend\src\cli\commands\push.ts)
+  ⎿  Wrote 50 lines to Backend\src\cli\commands\push.ts
+      1 import { resolve } from "node:path";
+      2 import chalk from "chalk";
+      3 import { loadLastReport } from "../lib/report.js";
+      4 import { summaryLines } from "../lib/output.js";
+      5
+      6 export interface PushOptions {
+      7   project: string;
+      8   api?: string;
+      9 }
+     … +49 lines (ctrl+o to expand)
+
+● Update(Backend\src\cli\index.ts)
+  ⎿  Added 8 lines
+      61    .option("--base <branch>", "base branch to diff against (defa
+          ults to $GITHUB_BASE_REF or \"main\")")
+      62    .action(githubCommentCommand);
+      63  
+      64 +program                                                        
+      65 +  .command("push")                                             
+      66 +  .description("Upload the last scan report to the WM-Sentinel 
+         +API (dashboard)")                                              
+      67 +  .argument("[path]", "project path", ".")                     
+      68 +  .requiredOption("--project <id>", "project id in the WM-Senti
+         +nel API")                                                      
+      69 +  .option("--api <url>", "API base URL (defaults to $WM_SENTINE
+         +L_API_URL or http://localhost:4000)")                          
+      70 +  .action(pushCommand);                                        
+      71 +                                                               
+      72  program.parseAsync(process.argv);
+
+● Update(Backend\src\cli\index.ts)
+  ⎿  Added 1 line
+       6  import { verifyCommand } from "./commands/verify.js";
+       7  import { reportCommand } from "./commands/report.js";
+       8  import { githubCommentCommand } from "./commands/github-comment
+          .js";
+       9 +import { pushCommand } from "./commands/push.js";              
+      10  
+      11  const program = new Command();
+      12  
+
+● Bash(python - <<'EOF'
+      p='package.json'; s=open(p,encoding='utf-8').read()…)
+  ⎿  Updated Backend\package.json (+6 -1)
+       3    "version": "1.0.0",
+       4    "description": "",
+       5    "main": "index.js",
+       6 +  "bin": {                                                     
+       7 +    "wm-sentinel": "dist/cli/index.js"                         
+       8 +  },                                                           
+       9    "scripts": {
+      10      "test": "node --import tsx --test tests/*.test.ts",
+      11      "dev": "tsx watch src/index.ts",
+      12      "build": "tsc",
+      13      "start": "node dist/index.js",
+      14      "cli": "tsx src/cli/index.ts",
+      12 -    "worker": "tsx watch src/worker/index.ts",                 
+      15 +    "worker": "tsx src/worker/index.ts",                       
+      16 +    "worker:start": "node dist/worker/index.js",               
+      17      "prisma:generate": "prisma generate",
+      18      "prisma:migrate": "prisma migrate dev",
+      19 +    "prisma:deploy": "prisma migrate deploy",                  
+      20      "prisma:studio": "prisma studio",
+      21      "prisma:seed": "tsx prisma/seed.ts"
+      22    },
+
+● Since Backend/node_modules is missing on this Windows copy, I'll run npm ci to
+  restore dependencies from package-lock.json, then generate the Prisma client
+  before typechecking and testing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Git Bash can't spawn cmd.exe for npm's postinstall scripts, so I'll rerun it
+  from PowerShell.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The typecheck is clean. Next the tests and build. I'll also have Prisma
+  generate the SQL diff between the old and new schema, to check my hand-written
+  migration matches.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The schema is valid and the build passes. The diff failed only because
+  PowerShell added a BOM to the temp file, and my test filter caught nothing.
+  I'll redo both.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The migration matches and all 12 tests pass, including the 2 new correlation
+  tests. Next, I'll add a test for the API's import validator against real and
+  bad CLI output, then smoke-test the HTTP layer for auth, validation, and 404s
+  without needing a database.
+
+● Bash(cat >> tests/core.test.ts <<'EOF'…)
+  ⎿  Updated Backend\tests\core.test.ts (+12 -0)
+      158      await rm(dir, { recursive: true, force: true });
+      159    }
+      160  });
+      161 +                                                              
+      162 +test("API import validation accepts a CLI report and rejects b
+          +ad enum values", async () => {                                
+      163 +  const { validateReportFile } = await import("../src/services
+          +/reportValidation.js");                                       
+      164 +  const findings = scoreFindings(correlateFindings([finding(),
+          + finding({ filePath: "z.ts", source: "GITLEAKS" })]));        
+      165 +  const report = JSON.parse(JSON.stringify({                  
+      166 +    version: 1, projectPath: ".", generatedAt: new Date().toIS
+          +OString(),                                                    
+      167 +    scannerResults: [{ scanner: "SEMGREP", findingCount: 1 }],
+          + rawFindingCount: 2, findings,                                
+      168 +  }));                                                        
+      169 +  assert.equal(validateReportFile(report).findings.length, 2);
+      170 +  report.findings[0].severity = "SEVERE";                     
+      171 +  assert.throws(() => validateReportFile(report), /findings\[0
+          +\]\.severity/);                                               
+      172 +});                                                           
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Auth, validation, CORS, and 404 handling all check out, and the two 500s are
+  expected from my fake database URL. I'll fix the findings endpoint to validate
+  the query string before hitting the database, and check what's still running
+  after my overly broad cleanup command.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only my test server is running, so the broad command didn't kill anything
+  else. Stopping it and fixing the validation order:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(Backend\src\controllers\index.ts)
+  ⎿  Added 5 lines, removed 3 lines
+       92  
+       93  export async function listAssessmentFindings(req: Request, res
+           : Response) {
+       94    const id = param(req, "id");
+       95 -  await assessments.getAssessment(id);                        
+       95    const severity = oneOf(queryString(req, "severity")?.toUpper
+           Case(), SEVERITIES, "severity");
+       96    const category = oneOf(queryString(req, "category")?.toUpper
+           Case(), CATEGORIES, "category");
+       97    const source = oneOf(queryString(req, "source")?.toUpperCase
+           (), SOURCES, "source");
+       98    const status = oneOf(queryString(req, "status")?.toUpperCase
+           (), FINDING_STATUSES, "status");
+       99    const context = oneOf(queryString(req, "context")?.toLowerCa
+           se(), CONTEXTS, "context");
+      100 +  const take = queryInt(req, "limit", 200, 1000);             
+      101 +  const skip = queryInt(req, "offset", 0, Number.MAX_SAFE_INTE
+          +GER);                                                         
+      102 +  await assessments.getAssessment(id);                        
+      103    res.json(
+      104      await findings.listFindings(id, {
+      105        ...(severity ? { severity } : {}),
+     ...
+      107        ...(source ? { source } : {}),
+      108        ...(status ? { status } : {}),
+      109        ...(context ? { context } : {}),
+      108 -      take: queryInt(req, "limit", 200, 1000),                
+      109 -      skip: queryInt(req, "offset", 0, Number.MAX_SAFE_INTEGER
+          -),                                                            
+      110 +      take,                                                   
+      111 +      skip,                                                   
+      112      })
+      113    );
+      114  }
+
+● Now a self-scan with the WM rules, to check the new API code doesn't trip
+  WM-Sentinel's own checks (WM-AUTH/WM-API look for routes without auth). Then a
+  final typecheck and build.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The self-scan flags one MEDIUM (35% confidence) on the new routes, but it's a
+  false positive—auth is actually applied at the mount point, a known limitation
+  from HANDOFF problem 5, so it won't block the gate. Next I'll run typecheck
+  and build via PowerShell, since npm can't spawn cmd from Git Bash.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Everything passes. Last, the README: it needs the new env vars, the API routes
+  and the run steps, since they aren't discoverable otherwise.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 44 lines, removed 1 line
+      34  3. From `Backend/`:
+      35     ```bash
+      36     npx prisma generate
+      37 -   npx prisma migrate dev --name init                          
+      37 +   npx prisma migrate deploy     # applies prisma/migrations   
+      38     ```
+      39  
+      40 +### API, worker and CLI upload                                 
+      41 +                                                               
+      42 +Run the API and the worker in two terminals from `Backend/`:   
+      43 +                                                               
+      44 +```bash                                                        
+      45 +npm run dev       # Express API on http://127.0.0.1:4000       
+      46 +npm run worker    # picks up queued assessments and runs the sc
+         +anners                                                         
+      47 +```                                                            
+      48 +                                                               
+      49 +| Env var (`Backend/.env`) | Purpose |                         
+      50 +|---|---|                                                      
+      51 +| `API_KEY` | Bearer token required on `/api/*`. If unset, the 
+         +API is unauthenticated and listens on 127.0.0.1 only. |        
+      52 +| `HOST` | Bind address when `API_KEY` is set (default `0.0.0.0
+         +`). |                                                          
+      53 +| `CORS_ORIGIN` | Comma-separated dashboard origins (default `h
+         +ttp://localhost:3000`). |                                      
+      54 +| `SCAN_ROOT` | If set, a project's `localPath` must be inside 
+         +this directory. |                                              
+      55 +| `WORKER_POLL_MS` | Worker poll interval (default 5000). |    
+      56 +                                                               
+      57 +Routes (all under `/api`):                                     
+      58 +                                                               
+      59 +```                                                            
+      60 +GET/POST   /projects                      list / create {name, 
+         +repositoryUrl, defaultBranch?, localPath?}                     
+      61 +GET/PATCH  /projects/:id                                       
+      62 +GET        /projects/:id/assessments                           
+      63 +POST       /projects/:id/assessments      queue a scan {type: F
+         +ULL|PR|MANUAL} -> 202, worker runs it                          
+      64 +POST       /projects/:id/assessments/import   store a report fr
+         +om `wm-sentinel push`                                          
+      65 +GET        /assessments/:id               status, scanner runs,
+         + counts by severity                                            
+      66 +GET        /assessments/:id/findings      ?severity=&source=&ca
+         +tegory=&status=&context=&limit=&offset=                        
+      67 +GET        /assessments/:id/report        ?format=json|sarif|ht
+         +ml                                                             
+      68 +GET/PATCH  /findings/:id                  details + evidence / 
+         +triage {status}                                                
+      69 +```                                                            
+      70 +                                                               
+      71 +`localPath` is the local/test checkout the worker scans (never 
+         +a production host).                                            
+      72 +Triage status (`FALSE_POSITIVE`, `CONFIRMED`) carries over to t
+         +he same finding in later scans.                                
+      73 +                                                               
+      74 +Upload a CLI scan instead of queueing one:                     
+      75 +                                                               
+      76 +```bash                                                        
+      77 +npm run cli -- scan ~/coding/worldmonitor                      
+      78 +npm run cli -- push ~/coding/worldmonitor --project <projectId>
+         +   # uses $WM_SENTINEL_API_KEY if set                          
+      79 +```                                                            
+      80 +                                                               
+      81 +To get a real `wm-sentinel` command: `npm run build && npm link
+         +` (undo with `npm unlink -g backend`).                         
+      82 +                                                               
+      83  ## Structure inside `Backend/src`
+      84  
+      85  ```
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I made the correlation fix that was pending in cli-simp.txt and built most of
+  Milestone 3: the Express API, the queue worker and Prisma persistence to Neon.
+  The typecheck, npm run build and all 13 unit tests pass (3 are new). I
+  couldn't test anything that talks to the database, because there's no Neon
+  connection on this machine. Nothing is committed.
+
+  1. Correlation fix (correlation/index.ts
+  (Backend/src/core/correlation/index.ts))
+  - Two nearby findings no longer merge when they have different CWEs, so exec()
+    on line 7 and eval() on line 8 now stay separate.
+  - A merged finding now takes its title and description from the most confident
+    tool. When Semgrep at 90% and a WM rule at 40% flag the same line,
+    Semgrep's text wins.
+
+  2. Database (schema.prisma (Backend/prisma/schema.prisma), plus a new
+  migration)
+  - Findings now store every scanner that found them, their original raw
+    fingerprints and their code context. Each project has a localPath, which is
+    the local checkout the worker scans.
+  - I wrote the migration SQL by hand. It matches exactly what Prisma generates
+    from the schema diff.
+
+  3. API (routes (Backend/src/routes/index.ts), controllers
+  (Backend/src/controllers/index.ts), services/ (Backend/src/services/))
+  - You can create projects, queue a scan, upload a CLI report, list findings
+    with filters, export a report as JSON, SARIF or HTML, and mark findings as
+    false positive, confirmed and so on.
+  - Triage carries over: if you mark a finding as a false positive, it stays
+    that way in later scans. A finding marked FIXED that comes back is reopened.
+  - Every finding keeps one evidence record per scanner that reported it. Raw
+    scanner output isn't stored, because Gitleaks' output contains the actual
+    secret values.
+  - If you set API_KEY, every /api request needs it. If you don't, the server
+    only listens on 127.0.0.1. SCAN_ROOT can limit which folders the worker is
+    allowed to scan.
+
+  4. Worker (worker/index.ts (Backend/src/worker/index.ts)): it picks up queued
+  scans and runs them through the same pipeline as the CLI. If it's stopped
+  mid-scan, that assessment is marked FAILED the next time it starts.
+
+  5. CLI: a new wm-sentinel push --project <id> uploads the last scan to the
+  API. package.json now has a bin entry, so npm run build && npm link gives you
+  a real wm-sentinel command. I updated the README with the env vars and routes.
+
+  Checks I ran: I started the server with a fake database URL. Wrong or missing
+  API keys got 401, bad request bodies got 400, CORS headers were correct, and
+  unknown routes got 404. That smoke test turned up one validation-order bug,
+  which I fixed.
+
+  What I installed: to build and test on this Windows copy I ran npm ci in
+  Backend (from the existing lockfile only, no new packages) and prisma
+  generate. Delete Backend/node_modules if you don't want them.
+
+  Things to know:
+  - Scanning this repo now gives one false positive: WM-AUTH flags the new
+    routes as missing auth. Auth is applied once where the router is mounted,
+    and the rule only checks each route's own line. At 35% confidence it can't
+    block the gate.
+  - That same scan showed 12 hits on neighbouring lines from one rule chaining
+    into a single finding. It's a smaller version of the over-merging problem,
+    and worth fixing.
+
+  To test on Linux with Neon:
+  1. Put DATABASE_URL and DIRECT_URL in Backend/.env, then run npx prisma
+     migrate deploy.
+  2. Run npm run dev in one terminal and npm run worker in another.
+  3. Create a project: POST /api/projects with localPath: ~/coding/worldmonitor.
+  4. Queue a scan: POST /api/projects/<id>/assessments.
+  5. Or scan locally and upload it: npm run cli -- scan … && npm run cli -- push
+     … --project <id>.
+
+  Still missing from Milestone 3: saving PR results to the database (the PR
+  tables exist, but github-comment doesn't write to them yet), retests stored in
+  the database, the Next.js dashboard, and Dockerfiles.

@@ -3,15 +3,20 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "wm-sentinel": "dist/cli/index.js"
+  },
   "scripts": {
     "test": "node --import tsx --test tests/*.test.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "cli": "tsx src/cli/index.ts",
-    "worker": "tsx watch src/worker/index.ts",
+    "worker": "tsx src/worker/index.ts",
+    "worker:start": "node dist/worker/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts"
   },
